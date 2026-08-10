@@ -1,0 +1,28 @@
+# Python
+backend/venv/
+backend/.venv/
+**/__pycache__/
+*.pyc
+
+# Node
+**/node_modules/
+apps/**/dist/
+apps/**/build/
+apps/**/.expo/
+apps/**/.expo-shared/
+
+# Environment files — never commit secrets
+.env
+**/.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Supabase local state
+supabase/.branches/
+supabase/.temp/
+
+# Editor
+.vscode/
+.idea/
