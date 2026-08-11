@@ -1,14 +1,15 @@
 """
 CarePulse AI - FastAPI backend entrypoint.
 
-Week 1 goal: a minimal app with a health-check endpoint so we can confirm
-the backend runs and both client apps can reach it, before any real
-business logic (auth, patients, check-ins, risk engine) is added.
+Registers the health check plus the real API routers: /me (identity) and
+/patient/check-ins (the core tracer-bullet route: submit -> rule engine ->
+store -> respond). More routers get added here as each domain is built.
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import checkins, me
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -39,8 +40,9 @@ app.add_middleware(
 def health_check() -> dict:
     """
     Basic liveness check.
-
-    Used during Week 1 integration (connecting both clients to the backend)
-    to confirm the API is reachable before any real endpoints exist.
     """
     return {"status": "ok", "service": "carepulse-ai-backend"}
+
+
+app.include_router(me.router)
+app.include_router(checkins.router)
