@@ -1,35 +1,36 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { Navigate, Route, Routes } from "react-router-dom";
+import ProviderSignIn from "./pages/provider/ProviderSignIn";
+import ProviderLayout from "./pages/provider/ProviderLayout";
+import Dashboard from "./pages/provider/Dashboard";
+import Alerts from "./pages/provider/Alerts";
+import Patients from "./pages/provider/Patients";
+import Settings from "./pages/provider/Settings";
+import PatientRecord from "./pages/provider/PatientRecord";
+import RiskAssessmentReview from "./pages/provider/RiskAssessmentReview";
+import RecordFollowUp from "./pages/provider/RecordFollowUp";
+import FollowUpHistory from "./pages/provider/FollowUpHistory";
+import { RequireProviderSession } from "./lib/providerSession";
 
-function App() {
-  const [count, setCount] = useState(0)
-
+export default function App() {
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+    <Routes>
+      <Route path="/" element={<Navigate to="/provider" replace />} />
+      <Route path="/provider/sign-in" element={<ProviderSignIn />} />
+
+      <Route element={<RequireProviderSession />}>
+        <Route path="/provider" element={<ProviderLayout />}>
+          <Route index element={<Dashboard />} />
+          <Route path="alerts" element={<Alerts />} />
+          <Route path="patients" element={<Patients />} />
+          <Route path="settings" element={<Settings />} />
+          <Route path="patients/:patientId" element={<PatientRecord />} />
+          <Route path="patients/:patientId/risk-review" element={<RiskAssessmentReview />} />
+          <Route path="patients/:patientId/follow-up" element={<RecordFollowUp />} />
+          <Route path="patients/:patientId/history" element={<FollowUpHistory />} />
+        </Route>
+      </Route>
+    </Routes>
+  );
 }
 
-export default App
+

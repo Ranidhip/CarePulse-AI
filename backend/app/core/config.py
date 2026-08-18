@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     # General
     environment: str = "development"
 
+    # Demo mode — isolated SQLite data layer (backend/demo_data.sqlite3),
+    # used only while the real Supabase seeding blocker is unresolved.
+    # Never affects production routes, schema, or the Supabase client.
+    demo_mode: bool = False
+
     # CORS — origins allowed to call this API during local development.
     cors_allowed_origins: list[str] = [
         "http://localhost:5173",   # Vite dev server default

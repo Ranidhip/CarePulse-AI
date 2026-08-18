@@ -46,3 +46,14 @@ def health_check() -> dict:
 
 app.include_router(me.router)
 app.include_router(checkins.router)
+
+if settings.demo_mode:
+    from app.demo.db import init_db
+    from app.demo.seed import ensure_seeded
+    from app.api.demo_patient import router as demo_router
+    from app.api.demo_provider import router as demo_provider_router
+
+    init_db()
+    ensure_seeded()
+    app.include_router(demo_router)
+    app.include_router(demo_provider_router)
