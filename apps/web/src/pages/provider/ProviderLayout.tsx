@@ -7,7 +7,7 @@ import {
   clearProviderSession,
   getProviderSession,
   PROVIDER_SESSION_EXPIRED_EVENT,
-} from "../../lib/providerSession";
+} from "../../lib/providerSessionStore";
 import type { ProviderProfile } from "../../types";
 
 const NAV_ITEMS = [

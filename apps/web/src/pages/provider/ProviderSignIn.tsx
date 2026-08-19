@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
@@ -8,15 +8,17 @@ import Link from "@mui/material/Link";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { api, ApiError } from "../../lib/providerApi";
-import { setProviderSession } from "../../lib/providerSession";
+import { setProviderSession } from "../../lib/providerSessionStore";
 
 export default function ProviderSignIn() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const sessionExpired = searchParams.get("expired") === "1";
 
   async function handleSignIn() {
     if (!email.trim() || !password.trim()) {
@@ -106,6 +108,7 @@ export default function ProviderSignIn() {
           </Typography>
           <TextField
             fullWidth
+            slotProps={{ htmlInput: { "aria-label": "Work email" } }}
             placeholder="anjali.silva@clinic.lk"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -117,6 +120,7 @@ export default function ProviderSignIn() {
           </Typography>
           <TextField
             fullWidth
+            slotProps={{ htmlInput: { "aria-label": "Password" } }}
             type={showPassword ? "text" : "password"}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -145,7 +149,10 @@ export default function ProviderSignIn() {
 
           <Box sx={{ border: "1px dashed #C9CCD1", borderRadius: 1, p: 2, minHeight: 44, mb: 3 }}>
             <Typography variant="body2" color={error ? "error" : "text.secondary"}>
-              {error ?? "Validation messages will appear here."}
+              {error ??
+                (sessionExpired
+                  ? "Your session has expired. Please sign in again."
+                  : "Validation messages will appear here.")}
             </Typography>
           </Box>
 

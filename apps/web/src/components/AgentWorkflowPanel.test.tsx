@@ -17,7 +17,7 @@ const completedRun: AgentRun = {
       agent_name: "ClinicalSafetyAgent",
       action_type: "validate_safety",
       status: "success",
-      requires_provider_approval: false,
+      requires_provider_approval: true,
       created_at: "2026-08-19T08:00:03Z",
     },
     {
@@ -52,6 +52,7 @@ describe("AgentWorkflowPanel", () => {
       "2. Follow-up coordination",
       "3. Clinical safety review",
     ]);
+    expect(screen.getByText("Provider review required")).toBeInTheDocument();
     expect(screen.queryByText(/tool_input|tool_output|prompt/i)).not.toBeInTheDocument();
   });
 

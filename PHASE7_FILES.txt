@@ -1,0 +1,153 @@
+CarePulse AI — Phase 7 End-to-End Demo Readiness
+=================================================
+
+Baseline
+--------
+- Built on committed Phase 6 commit 982682a.
+- No migration, backend API redesign, UI framework change, or live OpenAI request.
+- Rule-engine authority, deterministic safety backstop, authorization, and task
+  transitions are unchanged.
+
+Files inspected
+---------------
+- PHASE5_FILES.txt
+- PHASE6_FILES.txt
+- backend/app/services/agents/orchestrator.py
+- backend/app/services/agents/safety.py
+- backend/app/api/provider.py
+- backend/app/models/provider.py
+- backend/scripts/seed_synthetic_users.py
+- supabase/migrations/20260818150000_agent_workflow_tables.sql
+- apps/web/src/lib/providerApi.ts
+- apps/web/src/lib/providerSession.tsx
+- apps/web/src/components/AgentWorkflowPanel.tsx
+- apps/web/src/pages/provider/FollowUpTasks.tsx
+- Existing backend and frontend tests
+
+Files changed
+-------------
+- apps/web/src/components/AgentWorkflowPanel.test.tsx
+- apps/web/src/lib/providerApi.ts
+- apps/web/src/lib/providerApi.test.ts
+- apps/web/src/lib/providerSession.tsx
+- apps/web/src/pages/provider/ProviderLayout.tsx
+- apps/web/src/pages/provider/ProviderSignIn.tsx
+
+Files added
+-----------
+- backend/app/services/demo_workflow.py
+- backend/app/services/demo_verification.py
+- backend/app/tests/test_demo_workflow.py
+- backend/app/tests/test_demo_verification.py
+- backend/scripts/seed_synthetic_agent_demo.py
+- backend/scripts/reset_synthetic_agent_demo.py
+- backend/scripts/verify_provider_demo.py
+- apps/web/src/lib/providerSessionStore.ts
+- apps/web/src/pages/provider/ProviderSignIn.test.tsx
+- PHASE7_DEMO_GUIDE.md
+- PHASE7_FILES.txt
+
+Features implemented
+--------------------
+- Explicit, idempotent synthetic-only workflow seeding with no OpenAI call.
+- Exact synthetic profile and active-assignment checks before every mutation.
+- One completed run, three ordered agent actions, an approval indicator, and pending/
+  in-progress tasks using the existing schema.
+- Safe reset preview and explicit confirmation mode, with tasks/actions/runs deleted in
+  foreign-key order and ordinary records excluded.
+- Real provider API verification for sign-in, dashboard, assigned patient, patient detail,
+  agent evidence, tasks, filtering, an allowed transition, authentication protection,
+  invalid-transition protection, and forbidden-response-field checks.
+- Sign-in 401 now shows "Invalid email or password." Authenticated 401 still clears the
+  session and redirects with the session-expired message.
+- Session helpers moved to a non-component module, removing all Fast Refresh warnings
+  without suppressing the lint rule.
+- Provider-review rendering assertion and new sign-in/session-expiry component tests.
+
+Safety restrictions
+-------------------
+- Synthetic records are accepted only when both profiles contain the exact existing
+  "(Synthetic Test Account)" marker and have an active assignment.
+- The marker `synthetic-demo-no-openai` owns demo runs; reset selects only that marker.
+- Demo actions use `synthetic_demo_evidence`; demo tasks use exact synthetic rationales.
+- Scripts contain no credentials, user IDs, service-role values, access tokens, or API keys.
+- Production API responses and React components contain no fabricated fallback data.
+- No prompt, tool payload, raw response, diagnosis, or medication recommendation is seeded
+  or exposed.
+
+Exact commands
+--------------
+Seed:
+  cd backend
+  python scripts/seed_synthetic_agent_demo.py --confirm-synthetic-seed
+
+Reset preview:
+  python scripts/reset_synthetic_agent_demo.py
+
+Confirmed reset:
+  python scripts/reset_synthetic_agent_demo.py --confirm-synthetic-reset
+
+End-to-end API verification (PowerShell; backend must be running):
+  $env:CAREPULSE_API_URL="http://127.0.0.1:8765"
+  python scripts/verify_provider_demo.py
+
+Commands actually run and confirmed results
+-------------------------------------------
+- Full backend pytest: 94 passed, 4 pre-existing warnings, 0 failures.
+- Focused Phase 7 backend tests: 4 passed, 0 failures.
+- python -m black --check on all Phase 7 Python files: passed.
+- python -m ruff check on all Phase 7 Python files: passed.
+- npm test: 4 test files, 16 tests passed, 0 failures.
+- npx tsc -p tsconfig.app.json --noEmit: passed.
+- npm run lint: passed with 0 errors and 0 warnings.
+- npm run build: passed.
+- python -m pip check: no broken requirements.
+- Required provider route-registration check: passed.
+- Changed-frontend security scan: no service-role/OpenAI keys, prompts, tool payloads,
+  raw model responses, or fabricated production agent data found.
+- ZIP integrity and changed-files-only content checks: passed.
+
+Synthetic data warning
+----------------------
+All records created by the Phase 7 seed are synthetic demonstration evidence. They must
+never be described or presented as genuine AI output. No live OpenAI call creates them.
+
+Unresolved blockers
+-------------------
+- OpenAI credits remain unavailable. This is intentionally bypassed only by the explicit
+  synthetic demonstration script; production behavior is unchanged.
+- Live Supabase seeding and real HTTP verification were not run in the isolated build
+  environment because it contains no user credentials. Run the documented commands
+  locally against the existing synthetic accounts.
+
+Extraction
+----------
+1. Confirm the repository is clean or commit current work.
+2. Extract the ZIP into the CarePulse-AI repository root and replace matching files.
+3. The archive contains only the changed/new files listed above; it excludes .env, .git,
+   node_modules, dist, venv, .venv, caches, and secrets.
+
+Local verification
+------------------
+Backend:
+  cd backend
+  .\.venv\Scripts\Activate.ps1
+  pytest
+  python -m pip check
+  python -m black --check app/services/demo_workflow.py app/services/demo_verification.py scripts/seed_synthetic_agent_demo.py scripts/reset_synthetic_agent_demo.py scripts/verify_provider_demo.py app/tests/test_demo_workflow.py app/tests/test_demo_verification.py
+  python -m ruff check app/services/demo_workflow.py app/services/demo_verification.py scripts/seed_synthetic_agent_demo.py scripts/reset_synthetic_agent_demo.py scripts/verify_provider_demo.py app/tests/test_demo_workflow.py app/tests/test_demo_verification.py
+
+Frontend:
+  cd apps\web
+  npm install
+  npm test
+  npx tsc -p tsconfig.app.json --noEmit
+  npm run lint
+  npm run build
+
+Manual demonstration
+--------------------
+Follow PHASE7_DEMO_GUIDE.md. Seed immediately before the mentor demonstration, use only
+the synthetic provider/patient, explicitly disclose that evidence is synthetic, show the
+three-agent sequence and provider approval, demonstrate task transitions, then preview or
+confirm reset as required.

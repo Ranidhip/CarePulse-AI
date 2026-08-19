@@ -4,7 +4,7 @@ import {
   getProviderSession,
   PROVIDER_SESSION_EXPIRED_EVENT,
   setProviderSession,
-} from "./providerSession";
+} from "./providerSessionStore";
 
 function storeSession() {
   setProviderSession({
@@ -25,6 +25,21 @@ afterEach(() => {
 });
 
 describe("providerApi authentication", () => {
+  it("uses a generic invalid-credentials message for sign-in 401", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({ detail: "Account-specific backend detail" }),
+      }),
+    );
+
+    await expect(api.signIn("nobody@example.com", "wrong")).rejects.toEqual(
+      expect.objectContaining({ status: 401, message: "Invalid email or password." }),
+    );
+  });
+
   it("attaches the bearer token to the real agent-run endpoint", async () => {
     storeSession();
     const fetchMock = vi.fn().mockResolvedValue({

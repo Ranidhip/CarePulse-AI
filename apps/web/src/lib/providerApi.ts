@@ -23,7 +23,7 @@ import type {
   ReasonCode,
   RiskLevel,
 } from "../types";
-import { expireProviderSession, getProviderSession } from "./providerSession";
+import { expireProviderSession, getProviderSession } from "./providerSessionStore";
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
@@ -56,8 +56,16 @@ async function errorDetail(response: Response): Promise<string | null> {
   }
 }
 
-function publicErrorMessage(status: number, detail: string | null): string {
-  if (status === 401) return "Your session has expired. Please sign in again.";
+function publicErrorMessage(
+  status: number,
+  detail: string | null,
+  authenticatedRequest: boolean,
+): string {
+  if (status === 401) {
+    return authenticatedRequest
+      ? "Your session has expired. Please sign in again."
+      : "Invalid email or password.";
+  }
   if (status === 403) return "Your account is not allowed to perform this action.";
   if (status === 404) return "The requested patient or task was not found.";
   if (status === 409) return "This task changed elsewhere. Refresh and try again.";
@@ -96,7 +104,10 @@ async function request<T>(
   if (!response.ok) {
     const detail = await errorDetail(response);
     if (response.status === 401 && options.auth !== false) expireProviderSession();
-    throw new ApiError(response.status, publicErrorMessage(response.status, detail));
+    throw new ApiError(
+      response.status,
+      publicErrorMessage(response.status, detail, options.auth !== false),
+    );
   }
 
   if (response.status === 204) return null as T;
