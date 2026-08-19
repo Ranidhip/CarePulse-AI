@@ -78,10 +78,36 @@ def get_alert_or_404(supabase: Client, alert_id: str) -> dict:
     row = one_or_none(
         supabase.table("alerts")
         .select(
-            "id, patient_id, status, risk_assessment_id, created_at, acknowledged_at, acknowledged_by"
+            "id, patient_id, status, risk_assessment_id, created_at, "
+            "acknowledged_at, acknowledged_by"
         )
         .eq("id", alert_id)
     )
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
+    return row
+
+
+def get_follow_up_task_or_404(supabase: Client, task_id: str) -> dict:
+    """
+    Loads only the provider-facing columns for an agent-generated task.
+
+    Authorization is intentionally performed by the caller after this
+    lookup because it needs both the task's patient_id and provider_id.
+    Callers must still return the same 404 for missing and unauthorized
+    tasks to avoid task/patient enumeration.
+    """
+    row = one_or_none(
+        supabase.table("follow_up_tasks")
+        .select(
+            "id, patient_id, agent_run_id, task_type, priority, rationale, "
+            "status, provider_id, due_at, created_at, completed_at"
+        )
+        .eq("id", task_id)
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Follow-up task not found",
+        )
     return row

@@ -6,19 +6,14 @@ Depends(require_assigned_patient), which enforces both the provider role
 and an active patient_provider_assignments row, returning 404 (never 403)
 when the caller isn't assigned — see app/api/deps.py.
 
-Scope note: this file does not implement GET /provider/patients/{id}/
-agent-runs, GET /provider/follow-up-tasks, or PATCH
-/provider/follow-up-tasks/{task_id}. Those read from agent_runs /
-agent_actions / follow_up_tasks, which the three-agent workflow (Phase 4)
-hasn't written to yet — implementing them now would be an endpoint that
-always returns empty data, not working functionality. They're built in
-Phase 5 ("provider display of AI evidence and agent actions") alongside
-the workflow that actually populates those tables.
+Phase 5 additionally exposes provider-safe agent-run evidence and agent-
+generated follow-up tasks. Raw prompts, tool inputs/outputs, model
+payloads, and internal errors never leave these routes.
 """
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from supabase import Client
 
 from app.api.deps import AssignedProviderContext, require_assigned_patient, require_provider
@@ -26,12 +21,17 @@ from app.core.security import CurrentUser, get_supabase_client
 from app.models.checkins import CheckInRecord
 from app.models.common import BPReadingOut, MedicationOut
 from app.models.provider import (
+    AgentActionSummaryOut,
+    AgentRunOut,
     AlertOut,
     AlertPatchRequest,
     CheckInWithAssessmentOut,
     DashboardSummaryOut,
     FollowUpActionCreateRequest,
     FollowUpActionOut,
+    FollowUpTaskOut,
+    FollowUpTaskPatchRequest,
+    FollowUpTaskStatus,
     PatientDetailOut,
     PatientSummaryOut,
     QueueRowOut,
@@ -41,6 +41,7 @@ from app.models.provider import (
 )
 from app.services.providers import (
     get_alert_or_404,
+    get_follow_up_task_or_404,
     get_patient_or_404,
     get_provider_profile_id,
     has_active_assignment,
@@ -56,6 +57,17 @@ TIER_SORT_ORDER = {"high": 0, "medium": 1, "pending": 2, "low": 3}
 # "real" id list is empty, so the query is still valid SQL that simply
 # matches nothing, instead of special-casing an empty .in_() call.
 _NO_MATCH_SENTINEL = "00000000-0000-0000-0000-000000000000"
+
+# Agent-generated follow-up tasks are intentionally monotonic. A task
+# may be claimed, completed, or dismissed, but a terminal task cannot be
+# reopened through this API. Repeating the current status is accepted as
+# an idempotent retry.
+FOLLOW_UP_TASK_TRANSITIONS: dict[str, set[str]] = {
+    "pending": {"pending", "in_progress", "dismissed"},
+    "in_progress": {"in_progress", "completed", "dismissed"},
+    "completed": {"completed"},
+    "dismissed": {"dismissed"},
+}
 
 
 # --- Shared data assembly -------------------------------------------------
@@ -274,10 +286,19 @@ def patient_detail(
         assessment_detail = None
         if assessment_row is not None:
             assessment_detail = RiskAssessmentDetailOut(
-                **{k: assessment_row[k] for k in (
-                    "id", "rule_result_level", "final_level", "ai_status",
-                    "requires_manual_review", "provider_summary", "model_version", "created_at",
-                )},
+                **{
+                    k: assessment_row[k]
+                    for k in (
+                        "id",
+                        "rule_result_level",
+                        "final_level",
+                        "ai_status",
+                        "requires_manual_review",
+                        "provider_summary",
+                        "model_version",
+                        "created_at",
+                    )
+                },
                 reasons=_reasons_for_assessment(supabase, assessment_row["id"]),
             )
         latest_check_in = CheckInWithAssessmentOut(
@@ -384,17 +405,13 @@ def patient_timeline(
 # --- Follow-up actions -----------------------------------------------------
 
 
-@router.get(
-    "/provider/patients/{patient_id}/follow-ups", response_model=list[FollowUpActionOut]
-)
+@router.get("/provider/patients/{patient_id}/follow-ups", response_model=list[FollowUpActionOut])
 def list_follow_ups(
     patient_id: str,
     assignment: AssignedProviderContext = Depends(require_assigned_patient),
     supabase: Client = Depends(get_supabase_client),
 ):
-    alert_ids_result = (
-        supabase.table("alerts").select("id").eq("patient_id", patient_id).execute()
-    )
+    alert_ids_result = supabase.table("alerts").select("id").eq("patient_id", patient_id).execute()
     alert_ids = [a["id"] for a in alert_ids_result.data] or [_NO_MATCH_SENTINEL]
     result = (
         supabase.table("follow_up_actions")
@@ -467,7 +484,176 @@ def update_alert(
         update_fields["acknowledged_at"] = datetime.now(timezone.utc).isoformat()
         update_fields["acknowledged_by"] = provider_id
 
-    result = (
-        supabase.table("alerts").update(update_fields).eq("id", alert_id).execute()
-    )
+    result = supabase.table("alerts").update(update_fields).eq("id", alert_id).execute()
     return AlertOut(**result.data[0])
+
+
+# --- Agent workflow evidence ----------------------------------------------
+
+
+@router.get(
+    "/provider/patients/{patient_id}/agent-runs",
+    response_model=list[AgentRunOut],
+)
+def list_patient_agent_runs(
+    patient_id: str,
+    assignment: AssignedProviderContext = Depends(require_assigned_patient),
+    supabase: Client = Depends(get_supabase_client),
+):
+    """
+    Returns auditable workflow metadata for an assigned patient.
+
+    agent_actions.tool_input/tool_output and agent_runs.error_code/model
+    are deliberately not selected, so raw prompts, model payloads, and
+    internal failure details cannot be exposed accidentally.
+    """
+    runs_result = (
+        supabase.table("agent_runs")
+        .select("id, check_in_id, patient_id, status, started_at, completed_at, created_at")
+        .eq("patient_id", patient_id)
+        .order("started_at", desc=True)
+        .execute()
+    )
+    if not runs_result.data:
+        return []
+
+    run_ids = [row["id"] for row in runs_result.data]
+    actions_result = (
+        supabase.table("agent_actions")
+        .select(
+            "id, agent_run_id, agent_name, action_type, status, "
+            "requires_provider_approval, created_at"
+        )
+        .in_("agent_run_id", run_ids)
+        .order("created_at", desc=False)
+        .execute()
+    )
+    actions_by_run: dict[str, list[AgentActionSummaryOut]] = {run_id: [] for run_id in run_ids}
+    for action in actions_result.data:
+        actions_by_run[action["agent_run_id"]].append(
+            AgentActionSummaryOut(
+                **{
+                    key: action[key]
+                    for key in (
+                        "id",
+                        "agent_name",
+                        "action_type",
+                        "status",
+                        "requires_provider_approval",
+                        "created_at",
+                    )
+                }
+            )
+        )
+
+    return [AgentRunOut(**run, actions=actions_by_run[run["id"]]) for run in runs_result.data]
+
+
+# --- Agent-generated follow-up tasks --------------------------------------
+
+
+@router.get("/provider/follow-up-tasks", response_model=list[FollowUpTaskOut])
+def list_follow_up_tasks(
+    task_status: FollowUpTaskStatus | None = Query(default=None, alias="status"),
+    user: CurrentUser = Depends(require_provider),
+    supabase: Client = Depends(get_supabase_client),
+):
+    """
+    Lists unclaimed tasks and tasks owned by the current provider for
+    actively assigned patients. Tasks claimed by another provider are
+    omitted even when both providers are assigned to the same patient.
+    """
+    provider_id = get_provider_profile_id(supabase, user.id)
+    assignments = (
+        supabase.table("patient_provider_assignments")
+        .select("patient_id")
+        .eq("provider_id", provider_id)
+        .eq("is_active", True)
+        .execute()
+    )
+    patient_ids = [row["patient_id"] for row in assignments.data]
+    if not patient_ids:
+        return []
+
+    query = (
+        supabase.table("follow_up_tasks")
+        .select(
+            "id, patient_id, agent_run_id, task_type, priority, rationale, "
+            "status, provider_id, due_at, created_at, completed_at"
+        )
+        .in_("patient_id", patient_ids)
+    )
+    if task_status is not None:
+        query = query.eq("status", task_status)
+    result = query.order("created_at", desc=True).execute()
+
+    visible_rows = [row for row in result.data if row.get("provider_id") in (None, provider_id)]
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    # The query already returns newest first. Python's sort is stable, so
+    # sorting only by priority preserves that order within each priority.
+    visible_rows.sort(key=lambda row: priority_order.get(row["priority"], 9))
+    return [FollowUpTaskOut(**row) for row in visible_rows]
+
+
+@router.patch(
+    "/provider/follow-up-tasks/{task_id}",
+    response_model=FollowUpTaskOut,
+)
+def update_follow_up_task(
+    task_id: str,
+    body: FollowUpTaskPatchRequest,
+    user: CurrentUser = Depends(require_provider),
+    supabase: Client = Depends(get_supabase_client),
+):
+    """Claims and advances an authorized agent-generated follow-up task."""
+    provider_id = get_provider_profile_id(supabase, user.id)
+    task = get_follow_up_task_or_404(supabase, task_id)
+
+    if not has_active_assignment(supabase, provider_id, task["patient_id"]):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Follow-up task not found",
+        )
+    if task.get("provider_id") not in (None, provider_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Follow-up task not found",
+        )
+
+    current_status = task["status"]
+    if body.status not in FOLLOW_UP_TASK_TRANSITIONS[current_status]:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Cannot transition follow-up task from {current_status} to {body.status}",
+        )
+
+    # An identical status is an idempotent retry and performs no write.
+    if body.status == current_status:
+        return FollowUpTaskOut(**task)
+
+    update_fields: dict = {"status": body.status}
+    if task.get("provider_id") is None:
+        update_fields["provider_id"] = provider_id
+    if body.status == "completed":
+        update_fields["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+    # Compare-and-set both owner and status. This prevents two assigned
+    # providers from claiming the same unowned task concurrently and
+    # prevents a stale client from overwriting a newer transition.
+    update_query = (
+        supabase.table("follow_up_tasks")
+        .update(update_fields)
+        .eq("id", task_id)
+        .eq("status", current_status)
+    )
+    if task.get("provider_id") is None:
+        update_query = update_query.is_("provider_id", "null")
+    else:
+        update_query = update_query.eq("provider_id", provider_id)
+    result = update_query.execute()
+    if not result.data:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Follow-up task changed; refresh and try again",
+        )
+    return FollowUpTaskOut(**result.data[0])

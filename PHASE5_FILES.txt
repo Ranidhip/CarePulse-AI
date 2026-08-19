@@ -1,0 +1,72 @@
+CarePulse AI — Phase 5 provider agent-workflow APIs
+===================================================
+
+Implemented endpoints
+---------------------
+
+1. GET /provider/patients/{patient_id}/agent-runs
+   - Requires provider authentication and an active patient assignment.
+   - Returns run status/timestamps and safe action summaries.
+   - Does not select or return model names, internal error codes, prompts,
+     tool inputs, tool outputs, or raw model payloads.
+
+2. GET /provider/follow-up-tasks
+   - Requires provider authentication.
+   - Returns unclaimed tasks and the current provider's tasks only for
+     actively assigned patients.
+   - Optional filter: ?status=pending|in_progress|completed|dismissed
+   - Hides tasks already owned by another provider.
+
+3. PATCH /provider/follow-up-tasks/{task_id}
+   - Requires provider authentication, an active patient assignment, and
+     either an unclaimed task or a task already owned by this provider.
+   - Claims an unclaimed task when it advances.
+   - Allowed transitions:
+       pending -> in_progress | dismissed
+       in_progress -> completed | dismissed
+       completed and dismissed are terminal
+     Repeating the current state is an idempotent success.
+   - Uses an atomic owner/status compare-and-set to prevent concurrent
+     double claims and stale updates.
+
+Files to replace/add
+--------------------
+
+backend/app/api/provider.py
+backend/app/models/provider.py
+backend/app/services/providers.py
+backend/app/tests/test_provider_agent_workflow.py  (new)
+
+No migration or dependency change is required.
+
+Verification completed in an isolated environment
+--------------------------------------------------
+
+- Full pytest suite: 90 passed, 4 pre-existing warnings
+- New Phase 5 tests: 12
+- Black formatting check: passed
+- Ruff lint check on all changed files: passed
+- Required FastAPI route registration: passed
+- No Supabase or OpenAI request was made by the Phase 5 tests
+
+Local installation and verification
+-----------------------------------
+
+1. Extract this ZIP into the CarePulse-AI repository root and allow the
+   four files above to replace/add their matching paths.
+2. From backend/ with .venv active, run:
+
+       pytest
+       python -m pip check
+       python scripts/check_db_readiness.py
+
+   Expected pytest result: 90 passed. The existing warnings are non-blocking.
+3. Start the backend and open http://127.0.0.1:8000/docs. Authenticate with
+   a provider token and verify the three endpoints listed above. Empty
+   lists are valid when the real project has no completed agent workflow
+   rows yet.
+4. Commit after local verification:
+
+       git add .
+       git commit -m "Complete Phase 5 provider agent workflow APIs"
+

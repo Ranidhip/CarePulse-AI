@@ -1,16 +1,11 @@
 """
 Request/response models for /provider/* routes.
 
-Note on scope: models here cover dashboard summary, priority queue,
-patient detail, timeline, and follow-up actions (all backed by tables
-that already exist). They deliberately do NOT cover agent runs or
-follow-up tasks (the agent_runs / agent_actions / follow_up_tasks tables
-added in the Phase 1 migration) — that surface is real but has nothing to
-display until the three-agent workflow (Phase 4) actually writes to it.
-Building those response shapes now against empty/nonexistent-until-applied
-tables would be a hollow shell, not working functionality; they're
-deferred to Phase 5 ("provider display of AI evidence and agent actions"),
-per the confirmed priority order.
+Models here cover the provider dashboard, patient detail, alerts,
+provider-recorded follow-up actions, and the Phase 5 agent-run / agent-
+generated follow-up-task surface. Agent responses intentionally expose
+only safe audit metadata: never prompts, model payloads, tool inputs,
+tool outputs, or internal exception details.
 """
 
 from datetime import datetime
@@ -32,6 +27,22 @@ FollowUpOutcome = Literal[
     "other",
 ]
 FollowUpStatus = Literal["needs_review", "in_progress", "completed"]
+AgentRunStatus = Literal["running", "completed", "failed", "manual_review"]
+AgentActionStatus = Literal["success", "failed", "skipped"]
+AgentName = Literal[
+    "CheckInAnalysisAgent",
+    "FollowUpCoordinatorAgent",
+    "ClinicalSafetyAgent",
+]
+FollowUpTaskType = Literal[
+    "nurse_review",
+    "pharmacist_review",
+    "doctor_review",
+    "reminder",
+    "other",
+]
+FollowUpTaskStatus = Literal["pending", "in_progress", "completed", "dismissed"]
+FollowUpTaskPriority = Literal["low", "medium", "high"]
 
 
 class DashboardSummaryOut(BaseModel):
@@ -140,3 +151,43 @@ class TimelineEntryOut(BaseModel):
     occurred_at: datetime
     summary: str
     data: dict
+
+
+class AgentActionSummaryOut(BaseModel):
+    """Provider-safe action evidence; raw model/tool payloads are excluded."""
+
+    id: str
+    agent_name: AgentName
+    action_type: str
+    status: AgentActionStatus
+    requires_provider_approval: bool
+    created_at: datetime
+
+
+class AgentRunOut(BaseModel):
+    id: str
+    check_in_id: str
+    patient_id: str
+    status: AgentRunStatus
+    started_at: datetime
+    completed_at: datetime | None
+    created_at: datetime
+    actions: list[AgentActionSummaryOut]
+
+
+class FollowUpTaskOut(BaseModel):
+    id: str
+    patient_id: str
+    agent_run_id: str
+    task_type: FollowUpTaskType
+    priority: FollowUpTaskPriority
+    rationale: str
+    status: FollowUpTaskStatus
+    provider_id: str | None
+    due_at: datetime | None
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class FollowUpTaskPatchRequest(BaseModel):
+    status: FollowUpTaskStatus
