@@ -1,9 +1,8 @@
 /**
- * Types mirroring the JSON shapes returned by backend/app/api/
- * demo_provider.py and demo_patient.py. Field names intentionally match
- * the API responses (mostly snake_case for raw passthrough fields from
- * FastAPI's dict returns) rather than being renamed, so there's no
- * silent mapping layer to drift out of sync with the backend.
+ * Provider-dashboard view models plus exact Phase 5 agent-workflow API
+ * response types. The existing dashboard view models remain camelCase;
+ * providerApi.ts owns the explicit mapping from the production FastAPI
+ * snake_case responses.
  */
 
 export type RiskLevel = "low" | "medium" | "high" | "pending";
@@ -59,11 +58,11 @@ export interface ApiBPReading {
 export interface ApiCheckIn {
   id: string;
   patient_id: string;
-  missed_doses: number;
+  missed_doses: boolean;
   missed_dose_count: number | null;
-  medication_stopped: number;
+  medication_stopped: boolean;
   supply_bucket: string;
-  supply_remaining: number;
+  supply_remaining: boolean;
   systolic: number | null;
   diastolic: number | null;
   difficulty_reported: number;
@@ -139,5 +138,86 @@ export interface ProviderProfile {
 
 export interface ProviderSession {
   accessToken: string;
+  refreshToken: string;
+  expiresAt: number | null;
   provider: ProviderProfile;
+}
+
+export type AgentRunStatus = "running" | "completed" | "failed" | "manual_review";
+export type AgentActionStatus = "success" | "failed" | "skipped";
+export type AgentName =
+  | "CheckInAnalysisAgent"
+  | "FollowUpCoordinatorAgent"
+  | "ClinicalSafetyAgent";
+
+export interface AgentActionSummary {
+  id: string;
+  agent_name: AgentName;
+  action_type: string;
+  status: AgentActionStatus;
+  requires_provider_approval: boolean;
+  created_at: string;
+}
+
+export interface AgentRun {
+  id: string;
+  check_in_id: string;
+  patient_id: string;
+  status: AgentRunStatus;
+  started_at: string;
+  completed_at: string | null;
+  created_at: string;
+  actions: AgentActionSummary[];
+}
+
+export type FollowUpTaskStatus = "pending" | "in_progress" | "completed" | "dismissed";
+export type FollowUpTaskType =
+  | "nurse_review"
+  | "pharmacist_review"
+  | "doctor_review"
+  | "reminder"
+  | "other";
+export type FollowUpTaskPriority = "low" | "medium" | "high";
+
+export interface FollowUpTask {
+  id: string;
+  patient_id: string;
+  agent_run_id: string;
+  task_type: FollowUpTaskType;
+  priority: FollowUpTaskPriority;
+  rationale: string;
+  status: FollowUpTaskStatus;
+  provider_id: string | null;
+  due_at: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+/**
+ * Compatibility types for the isolated local prototype helpers that remain
+ * in src/lib. Production provider pages use the API-backed view models above.
+ */
+export interface CheckInInput {
+  medicationStopped: boolean;
+  missedDoseCount: number | null;
+  supplyRemainingDays: number | null;
+  systolic: number | null;
+  diastolic: number | null;
+  difficultyReported: boolean;
+  difficultyText: string | null;
+}
+
+export interface CheckIn extends CheckInInput {
+  id: string;
+  patientId: string;
+  patientSubmittedAt: string;
+}
+
+export interface FollowUpAction {
+  id: string;
+  patientId: string;
+}
+
+export interface Patient {
+  id: string;
 }

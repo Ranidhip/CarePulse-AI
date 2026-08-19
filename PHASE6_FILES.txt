@@ -1,0 +1,143 @@
+CarePulse AI — Phase 6 Provider Dashboard Agent-Workflow Integration
+=====================================================================
+
+Baseline
+--------
+- Built on the committed Phase 5 backend/API contract supplied by the user.
+- No backend source files or database migrations are changed by this package.
+- No live Supabase or OpenAI request is made by the frontend tests.
+
+Files changed
+-------------
+- apps/web/package.json
+- apps/web/package-lock.json
+- apps/web/src/App.tsx
+- apps/web/src/lib/providerApi.ts
+- apps/web/src/lib/providerSession.tsx
+- apps/web/src/pages/provider/PatientRecord.tsx
+- apps/web/src/pages/provider/ProviderLayout.tsx
+- apps/web/src/pages/provider/ProviderSignIn.tsx
+- apps/web/src/types/index.ts
+
+Files added
+-----------
+- apps/web/vitest.config.ts
+- apps/web/src/components/AgentWorkflowPanel.tsx
+- apps/web/src/components/AgentWorkflowPanel.test.tsx
+- apps/web/src/lib/providerApi.test.ts
+- apps/web/src/pages/provider/FollowUpTasks.tsx
+- apps/web/src/pages/provider/FollowUpTasks.test.tsx
+- apps/web/src/test/setup.ts
+- PHASE6_FILES.txt
+
+Features implemented
+--------------------
+- Replaced the provider dashboard's demo API calls with the authenticated FastAPI
+  provider endpoints while retaining the existing view models, routing, MUI theme,
+  pages and navigation structure.
+- Added real provider sign-in through POST /auth/sign-in and reused the existing
+  browser session/token mechanism for authenticated calls.
+- Added strongly typed agent-run, agent-action and follow-up-task contracts.
+- Added authenticated clients for:
+  - GET /provider/patients/{patient_id}/agent-runs
+  - GET /provider/follow-up-tasks (including optional status filter)
+  - PATCH /provider/follow-up-tasks/{task_id}
+- Added centralized, user-safe handling for 401, 403, 404, 409, 422 and network
+  failures. A 401 clears the local session and triggers the existing sign-in flow.
+- Added an AI Agent Workflow panel to patient details with status badges, timestamps,
+  strict three-agent ordering, safe action summaries, approval/manual-review signals,
+  and a truthful empty state.
+- Uses neutral styling for skipped actions and avoids inferring whether a follow-up was
+  created when a run requires manual review.
+- Added an AI Follow-up Tasks navigation item and page with filtering, refresh,
+  priority/status badges, patient name lookup, timestamps, loading/error/empty states,
+  and valid state-transition actions.
+- Task updates disable duplicate clicks, update immediately, refresh after success,
+  show a concise success message, and refresh/explain 409 conflicts.
+- No prompts, tool payloads, model payloads, internal error codes, Supabase service-role
+  keys or OpenAI keys are rendered or stored by the frontend.
+- No production fake agent data was added. Empty agent tables produce truthful empty
+  states.
+
+Frontend test coverage added
+----------------------------
+- Agent workflow successful rendering and expected agent order.
+- No-agent-run empty state.
+- Manual-review rendering.
+- Follow-up task list rendering and patient name display.
+- Status filtering.
+- pending -> in_progress.
+- in_progress -> completed.
+- Dismiss action.
+- Buttons disabled while updating.
+- 409 conflict refresh/message behavior.
+- 401 session expiry behavior.
+- Network failure behavior.
+
+Commands actually run and confirmed results
+-------------------------------------------
+- npm test
+  Result: 3 test files passed; 13 tests passed; 0 failures.
+- npx tsc -p tsconfig.app.json --noEmit
+  Result: TypeScript type checking passed; exit 0.
+- npm run lint
+  Result: exit 0; 0 errors; 4 existing Fast Refresh warnings in
+  src/lib/providerSession.tsx because that module exports the session provider and
+  shared session helpers.
+- npm run build
+  Result: TypeScript compilation and Vite production build passed; 601 modules
+  transformed.
+- env -u ALL_PROXY -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u http_proxy
+  -u https_proxy /tmp/carepulse-phase5-venv/bin/python -m pytest -q
+  Result: 90 backend tests passed; 4 warnings; 0 failures.
+- /tmp/carepulse-phase5-venv/bin/python -m pip check
+  Result: No broken requirements found.
+
+Unresolved blocker
+------------------
+- OpenAI API credits remain unavailable, so a live agent run was not invoked or
+  claimed. This does not block the Phase 6 dashboard integration. Until real agent
+  rows exist, the UI intentionally displays the truthful empty states.
+
+Local extraction
+----------------
+1. Back up or commit the current repository.
+2. Extract the ZIP directly into the CarePulse-AI repository root.
+3. Allow the archive to replace matching files. The archive contains only the files
+   listed above and does not include .env, .git, node_modules, venv, .venv or dist.
+
+Local verification
+------------------
+Backend terminal:
+  cd backend
+  .\.venv\Scripts\Activate.ps1
+  pytest
+  python -m pip check
+  uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+Web terminal:
+  cd apps\web
+  npm install
+  npm test
+  npm run lint
+  npm run build
+  npm run dev
+
+If apps/web/.env does not already exist, create it with:
+  VITE_API_URL=http://127.0.0.1:8000
+
+Manual demonstration
+--------------------
+1. Start FastAPI on http://127.0.0.1:8000 and Vite in a second terminal.
+2. Open the Vite URL and choose the provider application.
+3. Sign in with the synthetic provider account already created in Supabase Auth.
+4. Open a patient record and review the AI Agent Workflow section.
+5. If no agent run exists, confirm the truthful empty-state message is shown.
+6. Open AI Follow-up Tasks from provider navigation.
+7. Change the status filter and use Refresh.
+8. For a pending task, select Start or Dismiss. For an in-progress task, select
+   Complete or Dismiss. Confirm buttons disable while updating and the refreshed
+   status appears after success.
+9. Completed and dismissed tasks must remain read-only.
+10. Sign out, or invalidate the token, and confirm protected requests return the user
+    to provider sign-in without exposing backend details.

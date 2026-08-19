@@ -1,13 +1,14 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
+import AgentWorkflowPanel from "../../components/AgentWorkflowPanel";
 import RiskBadge from "../../components/RiskBadge";
 import { api } from "../../lib/providerApi";
-import type { PatientDetail } from "../../types";
+import type { AgentRun, PatientDetail } from "../../types";
 import { SUPPLY_LABELS } from "../../types";
 
 function formatDateTime(iso: string | null): string {
@@ -26,6 +27,24 @@ export default function PatientRecord() {
   const [data, setData] = useState<PatientDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
+  const [agentRunsLoading, setAgentRunsLoading] = useState(true);
+  const [agentRunsError, setAgentRunsError] = useState<string | null>(null);
+
+  const loadAgentRuns = useCallback(async () => {
+    if (!patientId) return;
+    setAgentRunsLoading(true);
+    setAgentRunsError(null);
+    try {
+      setAgentRuns(await api.getAgentRuns(patientId));
+    } catch (agentError) {
+      setAgentRunsError(
+        agentError instanceof Error ? agentError.message : "Failed to load agent workflow.",
+      );
+    } finally {
+      setAgentRunsLoading(false);
+    }
+  }, [patientId]);
 
   useEffect(() => {
     if (!patientId) return;
@@ -39,6 +58,10 @@ export default function PatientRecord() {
       cancelled = true;
     };
   }, [patientId]);
+
+  useEffect(() => {
+    void loadAgentRuns();
+  }, [loadAgentRuns]);
 
   if (loading) {
     return (
@@ -147,6 +170,13 @@ export default function PatientRecord() {
             </Typography>
           )}
         </Paper>
+
+        <AgentWorkflowPanel
+          runs={agentRuns}
+          loading={agentRunsLoading}
+          error={agentRunsError}
+          onRetry={() => void loadAgentRuns()}
+        />
 
         <Paper variant="outlined" sx={{ p: 3, gridColumn: "1 / -1" }}>
           <Typography variant="h3" gutterBottom>

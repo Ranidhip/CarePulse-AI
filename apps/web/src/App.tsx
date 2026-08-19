@@ -9,6 +9,7 @@ import PatientRecord from "./pages/provider/PatientRecord";
 import RiskAssessmentReview from "./pages/provider/RiskAssessmentReview";
 import RecordFollowUp from "./pages/provider/RecordFollowUp";
 import FollowUpHistory from "./pages/provider/FollowUpHistory";
+import FollowUpTasks from "./pages/provider/FollowUpTasks";
 import { RequireProviderSession } from "./lib/providerSession";
 
 export default function App() {
@@ -22,6 +23,7 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="alerts" element={<Alerts />} />
           <Route path="patients" element={<Patients />} />
+          <Route path="follow-up-tasks" element={<FollowUpTasks />} />
           <Route path="settings" element={<Settings />} />
           <Route path="patients/:patientId" element={<PatientRecord />} />
           <Route path="patients/:patientId/risk-review" element={<RiskAssessmentReview />} />
@@ -32,5 +34,4 @@ export default function App() {
     </Routes>
   );
 }
-
 

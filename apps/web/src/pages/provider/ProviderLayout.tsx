@@ -3,13 +3,18 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Link from "@mui/material/Link";
-import { getProviderSession, clearProviderSession } from "../../lib/providerSession";
+import {
+  clearProviderSession,
+  getProviderSession,
+  PROVIDER_SESSION_EXPIRED_EVENT,
+} from "../../lib/providerSession";
 import type { ProviderProfile } from "../../types";
 
 const NAV_ITEMS = [
   { label: "Dashboard", path: "/provider" },
   { label: "Alerts", path: "/provider/alerts" },
   { label: "Patients", path: "/provider/patients" },
+  { label: "AI Follow-up Tasks", path: "/provider/follow-up-tasks" },
   { label: "Settings", path: "/provider/settings" },
 ];
 
@@ -20,7 +25,13 @@ export default function ProviderLayout() {
   useEffect(() => {
     const session = getProviderSession();
     setProvider(session?.provider ?? null);
-  }, []);
+
+    function handleSessionExpired() {
+      navigate("/provider/sign-in?expired=1", { replace: true });
+    }
+    window.addEventListener(PROVIDER_SESSION_EXPIRED_EVENT, handleSessionExpired);
+    return () => window.removeEventListener(PROVIDER_SESSION_EXPIRED_EVENT, handleSessionExpired);
+  }, [navigate]);
 
   function handleSignOut() {
     clearProviderSession();

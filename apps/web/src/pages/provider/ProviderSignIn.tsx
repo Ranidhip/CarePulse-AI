@@ -26,13 +26,21 @@ export default function ProviderSignIn() {
     setError(null);
     setLoading(true);
     try {
-      const { access_token, provider } = await api.signIn(email.trim(), password);
-      setProviderSession({ accessToken: access_token, provider });
+      const { access_token, refresh_token, expires_at, provider } = await api.signIn(
+        email.trim(),
+        password,
+      );
+      setProviderSession({
+        accessToken: access_token,
+        refreshToken: refresh_token,
+        expiresAt: expires_at,
+        provider,
+      });
       navigate("/provider");
     } catch (e) {
       setError(
         e instanceof ApiError
-          ? "Sign in failed. Please try again."
+          ? e.message
           : e instanceof Error
             ? e.message
             : "Something went wrong."
