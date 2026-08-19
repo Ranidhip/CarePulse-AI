@@ -26,14 +26,39 @@ class Settings(BaseSettings):
         "http://localhost:19006",  # Expo web dev default
     ]
 
-    # Supabase — filled in during the Day 4/Day 9 auth + database setup.
-    # Leave blank for now; the app must still start without these set.
+    # Supabase — service-role key bypasses RLS and is used for all backend
+    # reads/writes (see core/security.py). The anon key is used only for
+    # the /auth/sign-in and /auth/refresh endpoints, which authenticate a
+    # user's password/token against Supabase Auth without ever using the
+    # service-role key for that purpose.
     supabase_url: str = ""
+    supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
 
-    # OpenAI — filled in during AI-service setup (Week 2).
-    # Server-side only. Never expose this to the mobile or web clients.
+    # OpenAI — server-side only. Never expose these to the mobile or web
+    # clients. Model is intentionally configurable and never hardcoded
+    # elsewhere in the codebase; verify it's actually available on the
+    # connected account before Phase 3 (live integration) proceeds.
     openai_api_key: str = ""
+    openai_model: str = "gpt-5.6-terra"
+
+    # AI workflow controls (Phase 3/4). Safe-by-default: AI is off until
+    # explicitly enabled, and safety review is on by default so it can't
+    # be silently skipped by omission.
+    ai_enabled: bool = False
+    ai_timeout_seconds: float = 20.0
+    ai_max_retries: int = 2
+    ai_require_safety_review: bool = True
+
+    # Synthetic seed-account credentials (backend/scripts/seed_synthetic_
+    # users.py). Deliberately NOT given default values, including for the
+    # emails: the seeding script refuses to run with any of these unset,
+    # rather than silently using a built-in fictional identity. Passwords
+    # are read here and never printed, logged, or returned by any route.
+    seed_provider_email: str = ""
+    seed_provider_password: str = ""
+    seed_patient_email: str = ""
+    seed_patient_password: str = ""
 
     class Config:
         env_file = ".env"

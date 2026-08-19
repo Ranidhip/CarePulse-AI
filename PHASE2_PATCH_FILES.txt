@@ -1,0 +1,141 @@
+CarePulse AI — Phase 2 Bugfix Patch (maybe_single() crash)
+Generated: 2026-08-19
+
+Extract into your CarePulse-AI root — this OVERWRITES 8 files you already
+have from the Phase 2 delivery, plus adds 1 new file and 1 new test file.
+Nothing else changes. This is a bugfix on top of Phase 2, not a new
+phase — it does not add any new route, table, or behavior.
+
+THE BUG
+
+  scripts/seed_synthetic_users.py crashed with:
+    AttributeError: 'NoneType' object has no attribute 'data'
+  immediately after successfully creating the provider Auth account,
+  while checking whether a matching public.users row already existed.
+
+ROOT CAUSE (confirmed by reading the actual installed library source,
+not assumed):
+
+  postgrest-py 0.16.11 (bundled with supabase-py 2.7.4) has this in
+  SyncMaybeSingleRequestBuilder.execute():
+
+      try:
+          r = SyncSingleRequestBuilder.execute(self)
+      except APIError as e:
+          if e.details and "The result contains 0 rows" in e.details:
+              return None
+
+  .maybe_single().execute() returns a BARE None — not a response object
+  with .data = None — when zero rows match. Every "does this row exist
+  yet" check in the Phase 2 delivery assumed the latter and called
+  .data directly, which crashes on the former. This affected every
+  existence check across auth, patient/provider lookups, the check-in
+  idempotency check, and the seed script — the seed script just hit it
+  first because it's the first thing that runs against a real project.
+
+THE FIX
+
+  Every .maybe_single()/.single() call in the codebase is removed.
+  Replaced with app/core/db.py's one_or_none(), which uses .limit(1)
+  instead: .limit(1).execute() always returns a normal response object
+  with .data as a list (empty or one item) — there is no special
+  "zero rows behaves differently" case to get wrong.
+
+REPLACED (existing files from Phase 2, full contents):
+
+  backend/app/core/security.py
+    - get_current_user()'s public.users lookup: .single() -> one_or_none().
+    - get_anon_supabase_client() and everything else unchanged.
+
+  backend/app/services/patients.py
+    - get_patient_profile_id(): .single() -> one_or_none().
+
+  backend/app/services/providers.py
+    - get_provider_profile_id(), has_active_assignment(),
+      get_patient_or_404(), get_alert_or_404(): all four switched from
+      .single()/.maybe_single() to one_or_none().
+
+  backend/app/api/auth.py
+    - _load_active_profile()'s users lookup: .maybe_single() -> one_or_none().
+
+  backend/app/api/patient.py
+    - patient_home() and patient_profile()'s patient_profiles lookups:
+      .single() -> one_or_none(), with an explicit (extremely unlikely)
+      404 fallback instead of assuming the row still exists.
+
+  backend/app/api/checkins.py
+    - The idempotency check: .maybe_single() -> one_or_none(). This one
+      mattered most for correctness going forward — it would have
+      crashed on every FIRST-TIME check-in submission against real
+      Supabase (not just duplicates), since "no existing check-in with
+      this key" is the common case, not the edge case.
+
+  backend/scripts/seed_synthetic_users.py
+    - All 5 existence checks (users x2, provider_profiles,
+      patient_profiles, patient_provider_assignments): .maybe_single()
+      -> one_or_none(). Same idempotent create-or-reuse logic and same
+      "never print credentials" behavior as before — only the query
+      pattern changed. Because the provider Auth account from the failed
+      run already exists, this version's get_or_create_auth_user() will
+      detect and reuse it automatically; nothing needs to be deleted
+      from Supabase Auth first.
+
+  backend/app/tests/test_auth_authorization.py
+    - The fake Supabase client's query builder no longer implements
+      .single()/.maybe_single() at all — it only implements .limit(),
+      matching what production code actually calls now. (The previous
+      version's fake incorrectly returned a wrapped object even on zero
+      rows for .maybe_single(), which is exactly why these tests passed
+      while the real seed script crashed — the fake didn't match reality.
+      This version does.)
+
+ADDED (new files):
+
+  backend/app/core/db.py
+    - one_or_none(builder): appends .limit(1), executes, and returns the
+      first row as a dict or None. The single shared fix for this whole
+      class of bug.
+
+  backend/app/tests/test_db_helpers.py
+    - Regression test for the exact failure: one_or_none() against a
+      zero-row .limit(1) response (the real shape), a one-row response,
+      a multi-row response (confirms only the first row is returned),
+      and defensively against a bare-None response (the old .maybe_single()
+      shape), so this bug class cannot silently return without a test
+      catching it.
+
+NOT INCLUDED / NOT TOUCHED:
+  - backend/app/api/provider.py, backend/app/main.py,
+    backend/app/core/config.py, backend/scripts/get_access_token.py,
+    backend/scripts/check_db_readiness.py — checked directly; none of
+    these ever called .single()/.maybe_single(), so none needed this fix.
+  - Every model file, checkins.py's non-idempotency logic, and every
+    other Phase 2 file not listed above.
+  - Your real backend/.env, .git, venv, node_modules.
+
+VERIFICATION NOTE:
+  Every touched file was re-syntax-checked (py_compile) after these
+  edits, and a full grep across the entire backend/ tree confirmed zero
+  remaining .single()/.maybe_single() calls in actual code (only in
+  comments/docstrings explaining the fix). I still cannot run pytest or
+  reach your Supabase project from here — you'll confirm both below.
+
+EXACT COMMANDS TO RUN AFTER EXTRACTING:
+
+  1. Re-run the seed script (it will now correctly reuse the provider
+     Auth account from the failed run, rather than erroring or
+     duplicating it):
+
+       python scripts/seed_synthetic_users.py
+
+     Expected: completes through both provider and patient sections and
+     the assignment, ending in "Seeding complete." with two auth user
+     IDs — same as originally expected, no crash.
+
+  2. Run the full test suite:
+
+       pytest
+
+     Expected: 46 passed (29 original + 13 auth/authorization tests +
+     4 new test_db_helpers.py tests). Zero network calls from any of the
+     new tests.

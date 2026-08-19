@@ -1,10 +1,16 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
-pydantic==2.9.2
+# pydantic/pydantic-core bumped from 2.9.2/2.23.4 specifically because
+# openai-agents 0.21.1 requires pydantic<3,>=2.12.2 — verified against
+# your actual resolved install (pip check clean, 63 tests passing after
+# the upgrade).
+pydantic==2.13.4
+pydantic-core==2.46.4
 pydantic-settings==2.5.2
 python-dotenv==1.0.1
 supabase==2.7.4
-openai==1.51.0
+openai==3.3.0
+openai-agents==0.21.1
 pytest==8.3.3
 httpx==0.27.2
 ruff==0.6.9

@@ -31,3 +31,29 @@ class CheckInCreateResponse(BaseModel):
     check_in_id: str
     risk_assessment: RiskAssessmentSummary
     message: str
+
+
+class CheckInRecord(BaseModel):
+    """
+    The patient's own check-in as stored — used by GET /patient/check-ins
+    and GET /patient/check-ins/latest. Deliberately does NOT include
+    provider-only fields (reason codes, evidence text, provider_summary):
+    those stay provider-facing only, per the "no clinical content on the
+    patient confirmation/history screens" safety rule.
+    """
+
+    id: str
+    missed_doses: bool
+    missed_dose_count: int | None
+    medication_stopped: bool
+    supply_remaining: bool
+    difficulty_reported: bool
+    difficulty_text: str | None
+    requests_contact: bool
+    patient_submitted_at: datetime
+    server_received_at: datetime
+
+
+class CheckInLatestResponse(BaseModel):
+    check_in: CheckInRecord
+    risk_assessment: RiskAssessmentSummary

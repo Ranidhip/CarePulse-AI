@@ -1,0 +1,64 @@
+CarePulse AI — Phase 1 Update (Baseline + Agent-Workflow Database)
+Generated: 2026-08-18
+
+Extract this ZIP into your existing CarePulse-AI repository root. It will
+create one new file and overwrite two existing files at the exact paths
+below. Nothing else in your repository is touched.
+
+ADDED (new file):
+  supabase/migrations/20260818150000_agent_workflow_tables.sql
+    - Purely additive migration. Adds agent_runs, agent_actions, and
+      follow_up_tasks tables, their indexes, and RLS policies for the
+      upcoming three-agent workflow.
+    - Does NOT modify, drop, or rename anything in the existing
+      "20260811043241_init_schema (2).sql" migration.
+    - NOT YET APPLIED to your Supabase project. Review it, confirm the
+      original init_schema migration is already live in your project
+      (public.users, public.patient_profiles, public.weekly_check_ins,
+      public.alerts, public.has_active_assignment(), public.risk_level
+      should already exist), then apply it yourself via the Supabase
+      SQL Editor or `supabase db push`.
+
+REPLACED (existing files, full contents):
+  backend/app/core/config.py
+    - Adds new Settings fields: supabase_anon_key, openai_model,
+      ai_enabled, ai_timeout_seconds, ai_max_retries,
+      ai_require_safety_review.
+    - All existing fields (environment, demo_mode, cors_allowed_origins,
+      supabase_url, supabase_service_role_key, openai_api_key) are
+      unchanged.
+    - AI remains OFF by default (ai_enabled=False) and safety review
+      remains ON by default (ai_require_safety_review=True) until
+      Phase 3/4 wire the live OpenAI + agent workflow in.
+
+  backend/.env.example
+    - Adds placeholder entries for SUPABASE_ANON_KEY, OPENAI_MODEL,
+      AI_ENABLED, AI_TIMEOUT_SECONDS, AI_MAX_RETRIES,
+      AI_REQUIRE_SAFETY_REVIEW.
+    - Contains ONLY placeholder values — no real keys, tokens, or
+      secrets. Your actual backend/.env is not touched by this ZIP and
+      is not included in it.
+
+NOT INCLUDED / NOT TOUCHED:
+  - Your real backend/.env (or any real secret)
+  - .git, .claude
+  - node_modules, Python virtual environments, SQLite databases
+  - Every other existing file in the repository (security.py,
+    checkins.py, me.py, deps.py, demo_patient.py, demo_provider.py,
+    models/checkins.py, services/rules/engine.py, services/ai/*.py,
+    main.py, requirements.txt, pyproject.toml, the original migration,
+    all existing tests, apps/mobile, apps/web, packages/shared-types,
+    openspec/*, README.md)
+
+MANUAL STEPS AFTER EXTRACTING:
+  1. Open the new migration file and confirm it matches what you expect.
+  2. Confirm your Supabase project already has the original init_schema
+     applied (tables/functions/types listed above should already exist).
+  3. Apply the new migration yourself (SQL Editor or CLI) when ready —
+     it is not applied automatically by this ZIP.
+  4. Diff backend/.env.example against your real backend/.env and copy
+     over the new placeholder keys (SUPABASE_ANON_KEY, OPENAI_MODEL,
+     AI_ENABLED, AI_TIMEOUT_SECONDS, AI_MAX_RETRIES,
+     AI_REQUIRE_SAFETY_REVIEW), then fill in real values in your .env
+     only — never in .env.example.
+  5. Run your own `pytest` to confirm nothing regressed.

@@ -1,0 +1,58 @@
+CarePulse AI — Phase 2 Test Fix (fake user id mismatch)
+Generated: 2026-08-19
+
+Extract into your CarePulse-AI root — this OVERWRITES exactly 1 file you
+already have. Nothing else changes. This is a test-only fix: no
+application code (routes, services, security, db helper) is touched.
+
+THE BUG (found by your pytest run — this is a real bug, not a false
+alarm):
+
+  2 tests failed:
+    test_assigned_provider_can_access_patient      -> 404 instead of 200
+    test_require_assigned_patient_dependency_directly -> unhandled 404
+
+ROOT CAUSE:
+
+  make_user() in the test file hardcoded id="test-user-id" for every
+  fake CurrentUser it built. But the fake provider_profiles row in
+  _provider_fake_client() was seeded with
+  user_id=PROVIDER_USER_ID ("provider-auth-user-1") — a different string.
+  get_provider_profile_id() looks up provider_profiles by user_id, so it
+  never found a match, and every one of these tests failed the
+  provider-profile lookup before ever reaching the assignment check they
+  were actually meant to test.
+
+  This also means test_provider_cannot_access_unassigned_patient was a
+  false positive: it asserted 404 and got 404, but for the wrong reason
+  (missing provider profile, not missing assignment) — it would have
+  passed even if has_active_assignment() were broken.
+
+THE FIX:
+
+  - make_user() now accepts an optional id parameter (default unchanged:
+    "test-user-id", so every test that doesn't care about a specific id
+    is untouched).
+  - The three assignment-related tests now pass id=PROVIDER_USER_ID
+    explicitly, so the fake user's id actually matches the fake
+    provider_profiles row's user_id — the same way it would in a real
+    Supabase project.
+
+REPLACED:
+
+  backend/app/tests/test_auth_authorization.py
+    - make_user(): added the id parameter.
+    - test_provider_cannot_access_unassigned_patient,
+      test_assigned_provider_can_access_patient,
+      test_require_assigned_patient_dependency_directly: now pass
+      id=PROVIDER_USER_ID. All other tests unchanged.
+
+NOT TOUCHED: every application file (routes, services, security, db.py),
+every other test file, the seed script, everything from the previous
+patch.
+
+EXACT COMMAND TO RUN AFTER EXTRACTING:
+
+    pytest
+
+  Expected: 46 passed, 0 failed.

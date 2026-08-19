@@ -1,0 +1,192 @@
+CarePulse AI — Phase 2 Update (Real Auth + Production Patient/Provider APIs)
+Generated: 2026-08-18
+
+Extract this ZIP into your existing CarePulse-AI repository root. It adds
+14 new files and overwrites 6 existing files at the exact paths below.
+Nothing else in your repository is touched. DEMO_MODE and every /demo/*
+route remain exactly as they were — the mobile and web apps are NOT
+switched to production routes in this phase.
+
+REPLACED (existing files, full contents):
+
+  backend/app/core/config.py
+    - Adds seed_provider_email, seed_provider_password,
+      seed_patient_email, seed_patient_password (all read from env,
+      never given real defaults). Every Phase 1 field is unchanged.
+
+  backend/app/core/security.py
+    - Adds get_anon_supabase_client() for real sign-in/refresh. The
+      existing service-role client, CurrentUser, and get_current_user()
+      are byte-for-byte unchanged.
+
+  backend/.env.example
+    - Adds SEED_PROVIDER_EMAIL / SEED_PROVIDER_PASSWORD /
+      SEED_PATIENT_EMAIL / SEED_PATIENT_PASSWORD placeholders. Everything
+      from Phase 1 is unchanged. Placeholder values only — no real
+      secrets.
+
+  backend/app/api/deps.py
+    - Adds AssignedProviderContext and require_assigned_patient() — the
+      dependency that enforces an active patient_provider_assignments row
+      and returns 404 (never 403) when missing. require_role,
+      require_patient, require_provider, require_admin are unchanged.
+
+  backend/app/api/checkins.py
+    - Same submit/list behavior as before. Refactored to take the
+      Supabase client via Depends(get_supabase_client) instead of an
+      inline call, so tests can override it — this is what makes the new
+      authorization tests possible. Adds GET /patient/check-ins/latest.
+      Uses the new shared app.services.patients.get_patient_profile_id
+      helper instead of a private duplicate.
+
+  backend/app/main.py
+    - Registers the new auth, patient, and provider routers. Health
+      check, /me, /patient/check-ins, and the DEMO_MODE-gated /demo/*
+      routers are unchanged.
+
+  backend/scripts/seed_synthetic_users.py
+    - Same idempotent create-or-reuse logic as before (Auth Admin API
+      only, never raw SQL against auth.users). Credentials now come from
+      backend/.env instead of being hardcoded in source. No longer prints
+      any email/password pair — only non-sensitive database IDs and a
+      completion message.
+
+  backend/scripts/get_access_token.py
+    - Updated to read credentials from the same backend/.env variables as
+      the seed script (this was necessary, not optional — leaving the old
+      hardcoded constants in place would have made this script silently
+      reference accounts the seed script no longer creates). Now signs in
+      via the anon client, matching how a real client authenticates.
+      Still prints a token to your own terminal on request — that remains
+      this script's entire purpose, for manual API testing.
+
+ADDED (new files):
+
+  backend/scripts/check_db_readiness.py
+    - Read-only script. Reports whether each of the 7 required tables
+      (users, patient_profiles, provider_profiles,
+      patient_provider_assignments, weekly_check_ins, alerts,
+      risk_assessments) is reachable via the service-role client, plus an
+      informational (non-blocking) check on the 3 Phase-1 agent-workflow
+      tables. Never creates, alters, or drops anything. Does not assume
+      the Phase 1 migration has been applied.
+
+  backend/app/api/auth.py
+    - POST /auth/sign-in and POST /auth/refresh. Verifies credentials/
+      tokens using the ANON client only; the service-role client is used
+      only afterward, to load the public.users row and enforce is_active.
+      Deactivated accounts get 403, not 401.
+
+  backend/app/api/patient.py
+    - GET /patient/home, /patient/profile, /patient/medications,
+      /patient/history. POST and GET /patient/bp-readings,
+      GET /patient/bp-readings/latest. (Check-in endpoints remain in
+      checkins.py, unchanged in location.)
+
+  backend/app/api/provider.py
+    - GET /provider/dashboard/summary, GET /provider/patients (priority
+      queue), GET /provider/patients/{id}, GET /provider/patients/{id}/
+      timeline, GET+POST /provider/patients/{id}/follow-ups, PATCH
+      /provider/alerts/{id}. Every patient-specific route requires an
+      active assignment via require_assigned_patient.
+    - Does NOT implement GET /provider/patients/{id}/agent-runs, GET
+      /provider/follow-up-tasks, or PATCH /provider/follow-up-tasks/{id}.
+      Those read from the agent_runs / agent_actions / follow_up_tasks
+      tables added in Phase 1, which nothing writes to until the
+      three-agent workflow (Phase 4) exists. Building them now would
+      return empty data by construction, not real functionality — they
+      belong in Phase 5 ("provider display of AI evidence and agent
+      actions"), per the confirmed priority order.
+
+  backend/app/models/auth.py
+    - SignInRequest, RefreshRequest, MeProfile, SessionResponse.
+
+  backend/app/models/common.py
+    - MedicationOut, BPReadingOut, BPReadingCreateRequest,
+      PatientProfileOut — shared between patient.py and provider.py.
+
+  backend/app/models/patient.py
+    - PatientHomeOut, PatientHistoryEntryOut.
+
+  backend/app/models/provider.py
+    - DashboardSummaryOut, QueueRowOut, RiskReasonOut,
+      RiskAssessmentDetailOut, CheckInWithAssessmentOut, AlertOut,
+      FollowUpActionOut/CreateRequest, AlertPatchRequest,
+      PatientSummaryOut, PatientDetailOut, TimelineEntryOut.
+
+  backend/app/models/checkins.py
+    - REPLACED, not just added: existing CheckInCreateRequest/Response
+      and RiskAssessmentSummary are unchanged; adds CheckInRecord and
+      CheckInLatestResponse for the new /patient/check-ins/latest route
+      and for reuse across patient.py and provider.py.
+
+  backend/app/services/patients.py
+    - get_patient_profile_id() — the shared lookup checkins.py used to
+      duplicate inline.
+
+  backend/app/services/providers.py
+    - get_provider_profile_id(), has_active_assignment(),
+      get_patient_or_404(), get_alert_or_404() — the authorization
+      building blocks used by deps.py and provider.py.
+
+  backend/app/tests/test_auth_authorization.py
+    - 13 tests covering: missing token, invalid/expired token, token with
+      no matching account, deactivated account, patient-cannot-call-
+      provider / provider-cannot-call-patient, provider-cannot-access-
+      unassigned-patient (404) / assigned-provider-can-access-patient
+      (200), the require_assigned_patient dependency directly, and
+      sign-in (invalid credentials / valid credentials / deactivated
+      account). Uses a small hand-written fake Supabase client — no real
+      network call, no real Supabase project required to run these.
+
+  PHASE2_FILES.txt
+    - This file.
+
+NOT INCLUDED / NOT TOUCHED:
+  - Your real backend/.env (or any real secret, token, or password)
+  - .git, .claude
+  - node_modules, Python virtual environments, SQLite databases
+  - apps/mobile, apps/web, packages/shared-types (not touched this phase
+    — the brief explicitly keeps clients on /demo/* routes for now)
+  - openspec/*, README.md, docs/*
+  - Every existing test file (test_ai_schemas.py, test_demo_provider.py,
+    test_deps.py, test_health.py, test_rule_engine.py) and every existing
+    backend file not listed above (models/checkins.py is listed — it WAS
+    changed; demo_patient.py, demo_provider.py, services/ai/*.py,
+    services/rules/engine.py, me.py were not)
+  - The Phase 1 migration file (already delivered, still not applied
+    automatically by anything in this ZIP)
+
+VERIFICATION NOTE:
+  No command was run against your actual machine or Supabase project —
+  I cannot execute pytest, reach your Supabase project, or apply any
+  migration from here. What WAS done: every new/changed .py file was
+  syntax-checked (py_compile), and the auth/session-handling code in
+  auth.py and security.py was cross-checked against the actual gotrue
+  and postgrest library source found inside the venv/ folder in your
+  uploaded zip (not assumed from memory) — confirmed field names
+  (Session.access_token/refresh_token/expires_in/expires_at/token_type,
+  AuthResponse.user/.session) and method signatures (sign_in_with_
+  password, refresh_session, admin.create_user, admin.list_users,
+  select/insert/update/eq/neq/in_/order/limit/single/maybe_single) match
+  what this code calls. This is static verification against real source,
+  not proof the tests pass — you still need to run pytest yourself.
+
+MANUAL STEPS AFTER EXTRACTING:
+
+  1. Run the database-readiness check first (see exact commands in the
+     chat reply) — confirms the 7 required tables exist before anything
+     else. Fine for this to report the 3 Phase-1 agent tables as
+     "not applied yet"; that's expected and does not block Phase 2.
+
+  2. Diff backend/.env.example against your real backend/.env and add
+     the 4 new SEED_* keys with fictional test values of your choosing.
+
+  3. Run the seed script to create the one synthetic provider + one
+     synthetic patient in Supabase Auth (idempotent — safe to re-run).
+
+  4. Run pytest. Expect all previous 29 tests plus these 13 new ones
+     (42 total) to pass, with zero network calls made by the new tests.
+
+  5. Optionally use get_access_token.py to manually exercise the new
+     production routes via curl/Postman/the /docs page.

@@ -1,0 +1,178 @@
+CarePulse AI — Phase 3 (Live OpenAI Adapter, Responses API)
+Generated: 2026-08-19
+
+Extract into your CarePulse-AI root — this ADDS 4 new files and
+REPLACES 2 existing files. Nothing else changes. The Agents SDK is not
+installed or referenced anywhere in this delivery — that's Phase 4, per
+your explicit instruction.
+
+WHY THIS TOOK SO LONG TO GET RIGHT
+
+The confirmed architecture requires the OpenAI Responses API. Your
+originally-pinned openai==1.51.0 has no `responses` resource at all —
+verified by reading that exact installed package's source before writing
+anything. Rather than quietly substitute Chat Completions, you upgraded
+to openai==3.3.0 and I re-verified the ENTIRE adapter surface against
+that upgrade's real behavior — via commands you ran and pasted back, not
+assumption:
+
+  - Responses.parse(text_format=<PydanticModel>, input=<str>,
+    instructions=<str>, model=<str>) -> ParsedResponse[T] — confirmed via
+    inspect.signature() on your machine.
+  - ParsedResponse.output_parsed -> T | None, .status, .error,
+    .incomplete_details — confirmed via inspect.getsource() on the real
+    installed response.py / parsed_response.py.
+  - Response.output_text / output_parsed logic, exception hierarchy
+    (openai.NotFoundError, RateLimitError, APITimeoutError, OpenAIError,
+    AuthenticationError) — all confirmed present via dir(openai).
+  - Bonus finding along the way: your `httpx2`/`httpcore2` dependencies
+    and the openai 1.x -> 3.x jump are both real, current, legitimate
+    changes in the OpenAI Python SDK ecosystem — confirmed via web
+    search, not just trusted at face value, since a two-major-version
+    jump with renamed transport packages is exactly the shape of a
+    supply-chain problem if it weren't real. It's real.
+
+IMPORTANT LIMITATION — READ THIS BEFORE RUNNING PYTEST
+
+Unlike Phase 1/2, I could not execute anything against openai==3.3.0
+myself. My own sandbox only has read access to your ORIGINAL uploaded
+zip's venv, which is pinned at openai==1.51.0 and is a Windows-built venv
+I can't run at all (only read as files). Every API shape above was
+verified by reading real source and signatures — but only ones you
+personally ran and pasted back. I have NOT personally executed
+`import openai`, `from app.services.ai.analysis import run_ai_analysis`,
+or any test in this delivery against your actual environment. Treat
+`pytest` below as the real first execution of this code, not a
+confirmation step — if anything fails, that's genuinely new information,
+not a formality.
+
+ADDED (new files):
+
+  backend/app/services/ai/client.py
+    - get_openai_client(): plain function (not a FastAPI Depends) that
+      constructs OpenAI(api_key=..., timeout=..., max_retries=...) from
+      settings. Deliberately not Depends()-injected — see the file's own
+      docstring: constructing a client with a missing API key must never
+      happen on every request regardless of whether AI is enabled.
+    - verify_model_available(client, model): used by
+      check_openai_model.py. Never raises; returns (bool, message).
+
+  backend/app/services/ai/analysis.py
+    - run_ai_analysis(client, *, model, difficulty_text, missed_doses,
+      missed_dose_count, medication_stopped, supply_remaining) ->
+      AIAnalysisOutcome. The actual adapter: one Responses API call,
+      wrapped in exception handling for NotFoundError / RateLimitError /
+      APITimeoutError / any other OpenAIError / any unexpected error, plus
+      explicit checks for response.status, refusal detection, and a
+      second independent Pydantic revalidation pass on top of whatever
+      .parse() already validated. Never raises to its caller — every
+      failure path returns a status="failed" outcome with an error_code,
+      never an exception, never patient free-text in logs.
+
+  backend/scripts/check_openai_model.py
+    - Manual pre-flight script (mirrors check_db_readiness.py). Confirms
+      OPENAI_MODEL is available on your account before you set
+      AI_ENABLED=true. Read-only — never enables AI itself.
+
+  backend/app/tests/test_ai_analysis.py
+    - 13 tests for run_ai_analysis() against a hand-built fake client
+      (no real network, no real API key). Covers: valid structured
+      response, invalid schema, unsupported reason code, unsafe clinical
+      language, prompt-injection text passed as inert data, timeout,
+      rate limit, model not found, missing/invalid API key, refusal, no
+      parsed output, incomplete response status, and an unexpected
+      exception type never propagating.
+    - Exception instances (APITimeoutError etc.) are built via
+      `cls.__new__(cls)` rather than their real constructor, which
+      requires a real httpx Request/Response object — the exact
+      transport type differs between your pre-upgrade (httpx) and
+      post-upgrade (httpx2) installs, and run_ai_analysis() never reads
+      any attribute off these beyond the exception's own type name, so
+      this is safe and version-independent.
+    - Two tests (invalid schema, unsupported reason code, unsafe
+      language) deliberately test this codebase's own independent
+      revalidation step rather than trying to get a real Responses API
+      call to reject bad data — that would depend on unverified SDK
+      internals; the revalidation step is code this project fully owns
+      and controls.
+
+  backend/app/tests/test_checkin_ai_integration.py
+    - 6 route-level tests against POST /patient/check-ins with a small
+      in-memory fake Supabase "database" (supports insert, not just
+      select — this route does several inserts per request). Covers: AI
+      disabled preserves Phase 2 behavior; AI raises a low rule result to
+      medium AND still creates a provider alert; AI cannot lower a high
+      rule result; AI failure uses generate_fallback_summary() and the
+      original check-in row is still present afterward; a duplicate
+      (idempotent) submission does not re-run AI a second time.
+
+REPLACED:
+
+  backend/app/api/checkins.py
+    - POST /patient/check-ins now runs AI analysis when
+      settings.ai_enabled is true (default false — unchanged behavior
+      until you explicitly turn it on). The entire AI block, including
+      client construction, is wrapped in its own try/except so ANY
+      failure there — not just ones run_ai_analysis() already catches —
+      degrades to the same fallback path, never a 500.
+    - Risk combination: final_level = max(rule_result, ai_suggested) by
+      severity, so AI can only raise risk. Alert creation now checks
+      final_level, not just the rule result — an AI-raised low->medium
+      case now correctly creates a provider alert, which it would NOT
+      have under Phase 2's rule-only alert logic.
+    - AI-derived risk_reasons rows are stored (source='ai') alongside
+      rule-derived ones (source='rule') — both are now recorded when AI
+      completes; only rule-derived ones when AI is disabled or fails.
+    - GET /patient/check-ins and GET /patient/check-ins/latest are
+      byte-for-byte unchanged.
+
+  backend/requirements.txt
+    - openai==1.51.0 -> openai==3.3.0. Nothing else changed — httpx2,
+      httpcore2, and truststore are openai's own transitive dependencies
+      and don't need explicit pins here, matching how this file already
+      doesn't pin anyio/idna/h11 either.
+
+NOT INCLUDED / NOT TOUCHED:
+  - The Agents SDK — not installed, not referenced, per your explicit
+    instruction to wait for Phase 4.
+  - app/services/ai/prompts.py, schemas.py, summary.py — used as-is,
+    completely unchanged. AI_RESPONSE_JSON_SCHEMA in prompts.py is not
+    used by this adapter (the Responses API's text_format=AIResponse
+    derives its own schema from the Pydantic model directly) — it's
+    still there, unused, in case a future phase wants it.
+  - app/api/patient.py, provider.py, main.py, every model file, every
+    other test file, both frontend apps, the Supabase migrations.
+  - agent_runs / agent_actions / follow_up_tasks (Phase 1's tables) —
+    still not written to by anything. That's Phase 4.
+
+EXACT COMMANDS TO RUN AFTER EXTRACTING:
+
+  1. Re-install dependencies so requirements.txt and your actual venv
+     agree (you already have openai==3.3.0 installed manually — this
+     just reconciles the file):
+
+       pip install -r requirements.txt
+
+  2. Confirm your model is available (read-only, does not enable AI):
+
+       python scripts/check_openai_model.py
+
+     Expected: "OK — 'gpt-5.6-terra' is available on this account."
+     If this fails, STOP — do not proceed to AI_ENABLED=true until it's
+     resolved. Paste the exact output back regardless of outcome.
+
+  3. Run the full test suite (AI stays disabled by default —
+     AI_ENABLED is not set to true anywhere by this delivery):
+
+       pytest
+
+     Expected, if everything here is correct: 64 passed (45 before this
+     phase + 13 + 6 new). Given the verification limitation above, I want
+     to be direct: I'm reporting the count I calculated, not one I've
+     confirmed by running it.
+
+  4. Only after both of the above are clean, if you want to see AI
+     actually run end-to-end against the real API (this spends real
+     API credits and is NOT part of ordinary pytest): set
+     AI_ENABLED=true in backend/.env, restart the server, and submit a
+     check-in through the app or curl.

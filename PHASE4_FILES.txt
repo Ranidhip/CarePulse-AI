@@ -1,0 +1,226 @@
+CarePulse AI — Phase 4 (Three-Agent Orchestration, OpenAI Agents SDK)
+Generated: 2026-08-19
+
+Extract into your CarePulse-AI root — ADDS 8 new files, REPLACES 3
+existing files. Nothing else changes. No migration needed — Phase 1's
+migration already covers agent_runs/agent_actions/follow_up_tasks, and
+you've already confirmed all three exist (OK).
+
+============================================================
+SCOPE DECISION — DISCLOSED PER REQUIREMENT #15
+============================================================
+
+The master brief's tool list (get_check_in_context, save_ai_analysis,
+create_provider_alert, etc.) implies agents calling live function tools
+mid-run, using @function_tool. This implementation does NOT do that.
+
+Instead: all three agents are pure structured-output reasoners — each
+receives context the orchestrator already gathered (as a plain string),
+and returns validated JSON (output_type=<Pydantic model>). ALL database
+writes (agent_runs, agent_actions, follow_up_tasks, risk_assessments,
+risk_reasons, alerts) happen in orchestrator/checkins.py Python code
+AFTER the safety gate, never via a live LLM-invoked tool call.
+
+Why: zero API credits mean none of this can be live-verified regardless
+of approach. Live tool-calling mid-agent-run is a materially larger trust
+surface (a misbehaving agent could directly trigger a DB write) for no
+testable benefit right now, and is harder to keep within the DI/mocking
+requirement without deeper, currently-unverifiable SDK behavior (tool
+invocation semantics, approval flows, etc. were not inspected — the
+diagnostic passes covered Agent/Runner/ModelResponse only, per your
+explicit "no broad diagnostic cycle" instruction). This is a genuine
+architectural simplification, not a hidden one. If you want true
+agentic tool-calling, that's a real follow-up, not a small patch on
+top of this.
+
+This does NOT weaken any of your explicit safety requirements: rule
+engine stays authoritative, ClinicalSafetyAgent + the deterministic
+backstop still gate every follow_up_task, bounded turns/timeouts still
+apply, and the audit trail (agent_runs/agent_actions) is still complete
+— it just gets written by orchestrator code instead of by the agents
+themselves.
+
+============================================================
+RESIDUAL VERIFICATION GAP — DISCLOSED
+============================================================
+
+app/tests/agents_fakes.py's _model_response_for() constructs a real
+agents.ModelResponse (verified: exact dataclass fields confirmed via
+inspect.getsource() against your installed openai-agents 0.21.1) wrapping
+an openai.types.responses ResponseOutputMessage/ResponseOutputText pair.
+Those two inner classes' own field names were NOT independently
+re-verified this session, per your explicit "inspect only ModelResponse"
+instruction. They're built from the same well-established Responses
+output format already confirmed during Phase 3 (ParsedResponseOutputMessage
+/ParsedResponseOutputText extend these exact base classes — seen directly
+in installed source then), using .model_construct() specifically because
+it bypasses Pydantic validation entirely, sidestepping the "which fields
+are required" uncertainty. If this is wrong, pytest will fail loudly and
+specifically inside test_agent_orchestrator.py / test_checkin_ai_
+integration.py — not silently — and the fix is isolated to one function.
+
+============================================================
+ADDED
+============================================================
+
+  backend/app/services/agents/__init__.py
+
+  backend/app/services/agents/schemas.py
+    - FollowUpCoordinatorOutput, ClinicalSafetyOutput. CheckInAnalysisAgent
+      reuses the existing AIResponse from Phase 3 (app.services.ai.schemas)
+      — no duplicate schema, and its banned-language field_validator
+      keeps working unchanged.
+
+  backend/app/services/agents/prompts.py
+    - Instructions for FollowUpCoordinatorAgent and ClinicalSafetyAgent.
+      CheckInAnalysisAgent reuses the existing SYSTEM_PROMPT unchanged.
+
+  backend/app/services/agents/definitions.py
+    - Factory functions building the three Agent instances. `model` is
+      the DI point (str in production, a fake Model in tests) — passed
+      directly to Agent(model=...), the real signature confirmed via
+      inspect.signature() against your install.
+
+  backend/app/services/agents/safety.py
+    - deterministic_safety_check(): the Python backstop that runs
+      regardless of what ClinicalSafetyAgent decides. Reuses AIResponse's
+      exact banned-term list (one source of truth, not two lists that
+      could drift).
+
+  backend/app/services/agents/orchestrator.py
+    - run_agent_workflow(): the full sequential three-agent flow.
+      Explicit upsert-based idempotency (_upsert_agent_run_running with
+      on_conflict="check_in_id" — per your note, the unique constraint
+      alone doesn't handle this) plus a separate "already finished, don't
+      re-run" check at entry (_load_existing_outcome_if_finished) for
+      direct/out-of-band re-invocation. Every agent call wrapped in
+      asyncio.wait_for(timeout_seconds) on top of each Agent's own
+      ModelSettings(timeout=...), and max_turns=4 on every Runner.run()
+      call. Full agent_actions audit trail, including a recorded action
+      when the deterministic backstop specifically rejects something.
+      follow_up_tasks created only if BOTH ClinicalSafetyAgent approves
+      AND the deterministic backstop passes.
+
+  backend/app/services/agents/client.py
+    - get_agent_model(): the DI point in checkins.py, mirroring Phase 3's
+      get_openai_client — a plain function, not a FastAPI Depends, for
+      the same reason (must not touch model selection unless AI is
+      enabled).
+
+  backend/app/tests/agents_fakes.py
+    - FakeAgentModel(Model): queue-based fake implementing get_response()/
+      stream_response(). Never makes a network call. See the residual-
+      gap note above for what's verified vs. not in its ModelResponse
+      construction.
+
+  backend/app/tests/test_agent_orchestrator.py
+    - 10 tests covering every required category: successful orchestration
+      (+ a "cannot lower high risk" variant), invalid structured output,
+      model timeout, insufficient quota, duplicate/idempotent execution,
+      prohibited medical output (blocked by the deterministic backstop —
+      assertion deliberately accepts either "manual_review" or "failed"
+      as the outcome status, since which one fires depends on unverified
+      SDK-internal validation behavior; the safety invariant asserted
+      unconditionally either way is "no follow-up task is ever created"),
+      partial agent failure (first agent succeeds and is recorded, second
+      fails), deterministic fallback.
+
+  backend/app/tests/test_agent_safety_backstop.py
+    - 6 direct unit tests of deterministic_safety_check(), fully isolated
+      from the agents SDK — the one check that needed to be certain
+      regardless of SDK-internal uncertainty.
+
+============================================================
+REPLACED
+============================================================
+
+  backend/app/api/checkins.py
+    - submit_check_in() is now `async def` (Runner.run() is async).
+      Phase 3's single-call run_ai_analysis()/get_openai_client are no
+      longer called — replaced by run_agent_workflow()/get_agent_model().
+      Idempotency check, check-in storage, BP storage, rule engine, and
+      both GET routes are unchanged. The entire agent-workflow block,
+      including model selection, is wrapped in try/except so ANY failure
+      there — not just ones the orchestrator already catches — degrades
+      to the same rule-only fallback, never a 500.
+    - app/services/ai/analysis.py and client.py (Phase 3) are UNCHANGED
+      and still present, just no longer called from this route — same
+      "leave it, don't delete it" precedent as Phase 3 did with
+      AI_RESPONSE_JSON_SCHEMA.
+
+  backend/app/tests/test_checkin_ai_integration.py
+    - REQUIRED rewrite, not optional: Phase 3's version monkeypatched
+      get_openai_client, which checkins.py no longer calls at all — those
+      tests would have silently stopped testing anything real. This
+      version monkeypatches get_agent_model instead, using FakeAgentModel
+      with 3 queued responses per successful scenario. Same 5 test
+      scenarios as Phase 3, same intent, adapted to the new mechanism.
+
+  backend/requirements.txt
+    - Added openai-agents==0.21.1. Bumped pydantic 2.9.2->2.13.4 and
+      pydantic-core 2.23.4->2.46.4 to satisfy openai-agents' pydantic<3,
+      >=2.12.2 requirement — matching your actual verified resolved
+      install (pip check clean, 63/63 passing after the upgrade). Every
+      other pin unchanged. New transitive dependencies (mcp, griffelib,
+      jsonschema, opentelemetry-api, etc.) are not individually pinned,
+      matching this file's existing convention of only pinning direct
+      dependencies.
+
+============================================================
+NOT INCLUDED / NOT TOUCHED
+============================================================
+  - No new migration — Phase 1's already covers everything, already
+    applied and confirmed OK by you.
+  - app/services/ai/analysis.py, client.py — present, unchanged, unused.
+  - app/api/patient.py, provider.py, main.py, every model file, every
+    other test file, both frontend apps.
+  - GET /provider/patients/{id}/agent-runs, GET /provider/follow-up-tasks,
+    PATCH /provider/follow-up-tasks/{id} — still not implemented. That's
+    Phase 5 ("provider display of AI evidence and agent actions"), which
+    you've explicitly said not to start yet.
+  - The Agents SDK's live tool-calling, handoffs, guardrail decorators,
+    tracing (explicitly disabled via RunConfig(tracing_disabled=True) on
+    every run), sessions, and every other SDK feature not needed for this
+    sequential three-agent flow.
+
+============================================================
+VERIFICATION NOTE — WHAT WAS AND WASN'T DONE
+============================================================
+Verified via your own terminal output, not assumed: openai-agents 0.21.1
+installed; Agent/Runner/function_tool/ModelResponse/Usage/exceptions
+signatures and source; pip check clean; DB tables present; 63/63 passing
+BEFORE this phase's changes. Every file here was syntax-checked
+(py_compile) in my sandbox. I have NOT executed any of this Phase 4 code
+myself — same limitation as Phase 3, now compounded by a second
+unverified SDK. No live Agents SDK inference has been attempted or
+claimed successful anywhere in this delivery; your API balance is still
+zero.
+
+============================================================
+COMMANDS TO RUN AFTER EXTRACTING
+============================================================
+
+  1. Reconcile installed packages with requirements.txt (you already
+     have these installed manually — this just aligns the file):
+
+       pip install -r requirements.txt
+
+  2. Run the full test suite:
+
+       pytest
+
+     Expected, if everything here is correct: 79 passed
+     (63 before this phase + 10 + 6 new − 0 removed; the rewritten
+     test_checkin_ai_integration.py has 5 tests, same count as its Phase
+     3 predecessor, so the net addition is 16, not a straight sum).
+
+     Given the disclosed residual gap above, I want to be direct: this is
+     a calculated count, not a confirmed one. If pytest surfaces a
+     failure specifically inside agents_fakes.py's construction or
+     test_agent_orchestrator.py, that is new information pointing at
+     exactly the one disclosed risk — not a sign anything else here is
+     wrong.
+
+  3. AI_ENABLED should stay however you already have it — nothing in
+     this delivery changes that setting. No live end-to-end run is
+     possible yet regardless, given the zero balance.

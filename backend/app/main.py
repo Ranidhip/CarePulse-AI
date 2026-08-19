@@ -1,15 +1,20 @@
 """
 CarePulse AI - FastAPI backend entrypoint.
 
-Registers the health check plus the real API routers: /me (identity) and
-/patient/check-ins (the core tracer-bullet route: submit -> rule engine ->
-store -> respond). More routers get added here as each domain is built.
+Registers the health check plus all real (Supabase-backed) API routers:
+/auth (sign-in/refresh), /me (identity), /patient/* (check-ins, home,
+profile, medications, BP readings, history), and /provider/* (dashboard,
+priority queue, patient detail, timeline, follow-ups, alerts).
+
+Demo routes (/demo/*, SQLite) remain available behind DEMO_MODE for the
+mobile and web apps, which have not been switched over to these
+production routes yet — that's Phase 5, not this phase.
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import checkins, me
+from app.api import auth, checkins, me, patient, provider
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -44,8 +49,11 @@ def health_check() -> dict:
     return {"status": "ok", "service": "carepulse-ai-backend"}
 
 
+app.include_router(auth.router)
 app.include_router(me.router)
 app.include_router(checkins.router)
+app.include_router(patient.router)
+app.include_router(provider.router)
 
 if settings.demo_mode:
     from app.demo.db import init_db
