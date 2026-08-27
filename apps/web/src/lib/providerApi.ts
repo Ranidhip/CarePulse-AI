@@ -75,6 +75,34 @@ function publicErrorMessage(
   return "The backend could not complete this request. Please try again.";
 }
 
+function isLocalBase(base: string): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(base);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// The deployed backend runs on Render's free tier, which spins the
+// instance down after inactivity — the first request after a gap can
+// fail as a plain network error (TypeError: Failed to fetch) while the
+// instance is still waking up, indistinguishable client-side from the
+// server actually being down. A couple of short retries covers that
+// window without leaving the caller stuck for long; a real outage still
+// surfaces as an error after they're exhausted.
+const NETWORK_RETRY_DELAYS_MS = [2000, 5000];
+
+async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetch(url, init);
+    } catch (err) {
+      if (attempt >= NETWORK_RETRY_DELAYS_MS.length) throw err;
+      await sleep(NETWORK_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
 async function request<T>(
   path: string,
   options: { method?: string; body?: unknown; auth?: boolean } = {},
@@ -92,15 +120,16 @@ async function request<T>(
 
   let response: Response;
   try {
-    response = await fetch(`${base}${path}`, {
+    response = await fetchWithRetry(`${base}${path}`, {
       method: options.method ?? "GET",
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
   } catch {
-    throw new Error(
-      `Could not reach the backend at ${base}. Make sure the FastAPI server is running.`,
-    );
+    const hint = isLocalBase(base)
+      ? "Make sure the FastAPI server is running."
+      : "The server may be waking up after a period of inactivity — please try again in a moment.";
+    throw new Error(`Could not reach the backend at ${base}. ${hint}`);
   }
 
   if (!response.ok) {
