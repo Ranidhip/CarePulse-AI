@@ -50,6 +50,7 @@ export default function ProviderLayout() {
     <Box sx={{ display: "flex", minHeight: "100vh" }}>
       <Box
         component="nav"
+        className="no-print"
         sx={{
           width: 220,
           flexShrink: 0,
@@ -103,6 +104,7 @@ export default function ProviderLayout() {
       <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Box
           component="header"
+          className="no-print"
           sx={{
             display: "flex",
             justifyContent: "flex-end",

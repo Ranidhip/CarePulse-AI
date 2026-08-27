@@ -66,3 +66,18 @@ button:focus-visible {
     background-color: #f9f9f9;
   }
 }
+
+/* Print / "Export as PDF" support (browser print-to-PDF — no library).
+   Elements marked .no-print (sidebar nav, top header, action buttons)
+   are hidden; the record content prints full-width on a white page
+   regardless of the app's dark/light theme. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff !important;
+    color: #000 !important;
+    display: block !important;
+  }
+}

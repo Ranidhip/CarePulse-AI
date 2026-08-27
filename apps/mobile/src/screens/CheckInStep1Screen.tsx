@@ -25,10 +25,18 @@ export default function CheckInStep1Screen() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    getDraft().then((d) => {
-      setDraftState(d);
-      setLoaded(true);
-    });
+    getDraft()
+      .then((d) => {
+        setDraftState(d);
+        setLoaded(true);
+      })
+      .catch(() => {
+        // A corrupted stored draft (bad JSON) would otherwise leave this
+        // screen on "Loading…" forever — start over with a clean draft
+        // instead of hanging.
+        setDraftState(EMPTY_CHECKIN_DRAFT);
+        setLoaded(true);
+      });
   }, []);
 
   function update(patch: Partial<CheckInDraft>) {

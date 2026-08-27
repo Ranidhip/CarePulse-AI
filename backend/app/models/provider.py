@@ -45,6 +45,17 @@ FollowUpTaskStatus = Literal["pending", "in_progress", "completed", "dismissed"]
 FollowUpTaskPriority = Literal["low", "medium", "high"]
 
 
+class ColleagueOut(BaseModel):
+    """Another provider, for the "reassign to" dropdown — nothing else about them is exposed."""
+
+    id: str
+    full_name: str
+
+
+class ReassignPatientRequest(BaseModel):
+    to_provider_id: str = Field(..., min_length=1)
+
+
 class DashboardSummaryOut(BaseModel):
     total_patients: int
     high_risk: int
@@ -52,6 +63,7 @@ class DashboardSummaryOut(BaseModel):
     pending_review: int
     low_risk: int
     check_ins_received: int
+    check_ins_this_week: int
 
 
 class QueueRowOut(BaseModel):
@@ -60,6 +72,11 @@ class QueueRowOut(BaseModel):
     age: int | None
     tier: RiskTier
     final_level: str | None
+    # Set only once a provider has overridden the level (see
+    # RiskAssessmentOverrideRequest below) — when present, this is the
+    # level actually shown to the provider; final_level above stays the
+    # unedited rule/AI result underneath it.
+    provider_override_level: str | None = None
     reason_codes: list[str]
     requires_manual_review: bool
     latest_bp: str | None
@@ -73,9 +90,14 @@ class RiskReasonOut(BaseModel):
     evidence_text: str | None
 
 
+RiskAssessmentFeedback = Literal["helpful", "not_helpful", "reported"]
+
+
 class RiskAssessmentDetailOut(BaseModel):
     id: str
     rule_result_level: str
+    ai_suggested_level: str | None
+    ai_confidence: float | None
     final_level: str
     ai_status: str
     requires_manual_review: bool
@@ -83,6 +105,43 @@ class RiskAssessmentDetailOut(BaseModel):
     model_version: str | None
     created_at: datetime
     reasons: list[RiskReasonOut]
+    feedback: RiskAssessmentFeedback | None = None
+    feedback_at: datetime | None = None
+    feedback_note: str | None = None
+    provider_override_level: str | None = None
+    provider_override_at: datetime | None = None
+    provider_override_reason: str | None = None
+
+
+class RiskAssessmentFeedbackRequest(BaseModel):
+    feedback: RiskAssessmentFeedback
+    # Only meaningful (and only ever shown by the UI) for "reported" — a
+    # one-click Helpful/Not helpful never carries a note.
+    feedback_note: str | None = Field(default=None, max_length=1000)
+
+
+class RiskAssessmentFeedbackOut(BaseModel):
+    id: str
+    feedback: RiskAssessmentFeedback | None
+    feedback_at: datetime | None
+    feedback_by: str | None
+    feedback_note: str | None
+
+
+RiskLevel = Literal["low", "medium", "high"]
+
+
+class RiskAssessmentOverrideRequest(BaseModel):
+    level: RiskLevel
+    reason: str = Field(..., min_length=1, max_length=1000)
+
+
+class RiskAssessmentOverrideOut(BaseModel):
+    id: str
+    provider_override_level: str | None
+    provider_override_at: datetime | None
+    provider_override_by: str | None
+    provider_override_reason: str | None
 
 
 class CheckInWithAssessmentOut(BaseModel):
@@ -117,6 +176,13 @@ class FollowUpActionCreateRequest(BaseModel):
     note_text: str | None = Field(default=None, max_length=1000)
     outcome: FollowUpOutcome | None = None
     status: FollowUpStatus = "needs_review"
+    # Optional: when set, the alert itself (alerts.status) is updated to
+    # this value as part of recording the follow-up — this is what
+    # actually closes an alert out. Distinct from `status` above, which
+    # only tracks the follow_up_actions row's own review state and never
+    # touches the alert. Without this field, "resolving" an alert here
+    # was a no-op that left it open forever (see PATCH /provider/alerts).
+    alert_status: AlertStatus | None = None
 
 
 class AlertPatchRequest(BaseModel):

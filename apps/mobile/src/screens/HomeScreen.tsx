@@ -9,6 +9,7 @@ import AppButton from "../components/AppButton";
 import BottomNav from "../components/BottomNav";
 import { api } from "../api/client";
 import { useRequireSession } from "../lib/useRequireSession";
+import { flushQueue, useSyncStatus } from "../lib/offlineQueue";
 import { colors, spacing } from "../theme";
 import type { RootStackParamList } from "../navigation/RootNavigator";
 import type { ApiHome } from "../types";
@@ -28,10 +29,15 @@ export default function HomeScreen() {
   const [data, setData] = useState<ApiHome | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const sync = useSyncStatus();
 
   const load = useCallback(async () => {
     try {
       setError(null);
+      // Every time Home is opened/refreshed is also a good moment to try
+      // sending anything saved locally while offline (Record BP, weekly
+      // check-in) — see lib/offlineQueue.ts.
+      await flushQueue();
       const home = await api.getHome();
       setData(home);
     } catch (e) {
@@ -47,6 +53,17 @@ export default function HomeScreen() {
     }, [session, load])
   );
 
+  const isOffline = Boolean(error) || sync.state === "offline";
+  const isSyncing = loading || sync.state === "syncing";
+  const statusDotColor = isSyncing ? colors.warning : isOffline ? colors.error : colors.success;
+  const statusText = isSyncing
+    ? "Syncing…"
+    : isOffline
+      ? sync.pendingCount > 0
+        ? `Offline — ${sync.pendingCount} item${sync.pendingCount === 1 ? "" : "s"} queued`
+        : "Offline — showing last known data"
+      : "Synced just now";
+
   return (
     <Screen scroll={false}>
       <ScrollView
@@ -55,10 +72,8 @@ export default function HomeScreen() {
       >
         <H1>Good morning{session ? `, ${session.name.split(" ")[0]}` : ""}</H1>
         <View style={styles.statusRow}>
-          <View style={styles.dot} />
-          <Secondary>
-            {loading ? "Syncing…" : error ? "Offline — showing last known data" : "Synced just now"}
-          </Secondary>
+          <View style={[styles.dot, { backgroundColor: statusDotColor }]} />
+          <Secondary>{statusText}</Secondary>
         </View>
 
         <Card>

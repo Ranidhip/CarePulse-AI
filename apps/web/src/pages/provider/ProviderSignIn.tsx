@@ -4,6 +4,8 @@ import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
 import FormControlLabel from "@mui/material/FormControlLabel";
+import IconButton from "@mui/material/IconButton";
+import InputAdornment from "@mui/material/InputAdornment";
 import Link from "@mui/material/Link";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
@@ -16,6 +18,7 @@ export default function ProviderSignIn() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberPassword, setRememberPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const sessionExpired = searchParams.get("expired") === "1";
@@ -32,12 +35,15 @@ export default function ProviderSignIn() {
         email.trim(),
         password,
       );
-      setProviderSession({
-        accessToken: access_token,
-        refreshToken: refresh_token,
-        expiresAt: expires_at,
-        provider,
-      });
+      setProviderSession(
+        {
+          accessToken: access_token,
+          refreshToken: refresh_token,
+          expiresAt: expires_at,
+          provider,
+        },
+        rememberPassword,
+      );
       navigate("/provider");
     } catch (e) {
       setError(
@@ -73,14 +79,14 @@ export default function ProviderSignIn() {
         </Typography>
         <Typography sx={{ maxWidth: 420, opacity: 0.75, mb: 5 }}>
           Review patient-reported adherence, blood-pressure readings and
-          follow-up alerts from one provider workspace.
+          follow-up activity from one provider workspace.
         </Typography>
         <Box sx={{ border: "1px solid rgba(255,255,255,0.2)", borderRadius: 1, p: 2, maxWidth: 380 }}>
           <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
             Clinical safety
           </Typography>
           <Typography variant="body2" sx={{ opacity: 0.75 }}>
-            AI summaries support review; healthcare providers make the final decision.
+            All alerts require provider review. No diagnosis or triage decision is automated.
           </Typography>
         </Box>
       </Box>
@@ -100,7 +106,7 @@ export default function ProviderSignIn() {
             Welcome back
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>
-            Sign in to the healthcare-provider dashboard.
+            Sign in to the healthcare provider dashboard.
           </Typography>
 
           <Typography variant="body2" sx={{ mb: 0.5 }}>
@@ -120,7 +126,23 @@ export default function ProviderSignIn() {
           </Typography>
           <TextField
             fullWidth
-            slotProps={{ htmlInput: { "aria-label": "Password" } }}
+            slotProps={{
+              htmlInput: { "aria-label": "Password" },
+              input: {
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton
+                      size="small"
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      onClick={() => setShowPassword((v) => !v)}
+                      edge="end"
+                    >
+                      <Typography variant="caption">{showPassword ? "Hide" : "Show"}</Typography>
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              },
+            }}
             type={showPassword ? "text" : "password"}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -128,8 +150,13 @@ export default function ProviderSignIn() {
           />
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2 }}>
             <FormControlLabel
-              control={<Checkbox checked={showPassword} onChange={(e) => setShowPassword(e.target.checked)} />}
-              label="Show password"
+              control={
+                <Checkbox
+                  checked={rememberPassword}
+                  onChange={(e) => setRememberPassword(e.target.checked)}
+                />
+              }
+              label="Remember password"
             />
             <Link component="button" variant="body2" underline="hover">
               Forgot Password?
@@ -147,17 +174,17 @@ export default function ProviderSignIn() {
             Sign In
           </Button>
 
-          <Box sx={{ border: "1px dashed #C9CCD1", borderRadius: 1, p: 2, minHeight: 44, mb: 3 }}>
+          <Box sx={{ border: "1px dashed #C9CCD1", borderRadius: 1, p: 2, minHeight: 44, mb: 1 }}>
             <Typography variant="body2" color={error ? "error" : "text.secondary"}>
               {error ??
                 (sessionExpired
                   ? "Your session has expired. Please sign in again."
-                  : "Validation messages will appear here.")}
+                  : "Error / validation messages appear here.")}
             </Typography>
           </Box>
 
           <Typography variant="caption" color="text.secondary">
-            Authorized healthcare-provider access only.
+            Access is restricted to registered clinical staff.
           </Typography>
         </Box>
       </Box>

@@ -17,7 +17,14 @@ from app.api.deps import require_patient
 from app.core.db import one_or_none
 from app.core.security import CurrentUser, get_supabase_client
 from app.models.checkins import CheckInRecord, RiskAssessmentSummary
-from app.models.common import BPReadingCreateRequest, BPReadingOut, MedicationOut, PatientProfileOut
+from app.models.common import (
+    BPReadingCreateRequest,
+    BPReadingOut,
+    MedicationCreateRequest,
+    MedicationOut,
+    MedicationUpdateRequest,
+    PatientProfileOut,
+)
 from app.models.patient import PatientHistoryEntryOut, PatientHomeOut
 from app.services.patients import get_patient_profile_id
 
@@ -40,7 +47,7 @@ def _latest_check_in_with_risk(supabase: Client, patient_id: str):
 
     assessment_result = (
         supabase.table("risk_assessments")
-        .select("rule_result_level, final_level, ai_status")
+        .select("rule_result_level, final_level, ai_status, provider_summary")
         .eq("check_in_id", check_in_row["id"])
         .order("created_at", desc=True)
         .limit(1)
@@ -52,6 +59,7 @@ def _latest_check_in_with_risk(supabase: Client, patient_id: str):
             rule_result_level=assessment_row["rule_result_level"],
             final_level=assessment_row["final_level"],
             ai_status=assessment_row["ai_status"],
+            provider_summary=assessment_row["provider_summary"],
         )
         if assessment_row
         else None
@@ -62,7 +70,7 @@ def _latest_check_in_with_risk(supabase: Client, patient_id: str):
 def _latest_bp(supabase: Client, patient_id: str) -> BPReadingOut | None:
     result = (
         supabase.table("blood_pressure_readings")
-        .select("id, systolic, diastolic, measured_at, recorded_at")
+        .select("id, systolic, diastolic, pulse, notes, measured_at, recorded_at")
         .eq("patient_id", patient_id)
         .order("measured_at", desc=True)
         .limit(1)
@@ -92,7 +100,7 @@ def patient_home(
 
     medications_result = (
         supabase.table("medication_schedules")
-        .select("id, medication_name, dosage_description, scheduled_time, supply_status")
+        .select("id, medication_name, dosage_description, scheduled_time, supply_status, reminder_enabled")
         .eq("patient_id", patient_id)
         .execute()
     )
@@ -137,11 +145,100 @@ def patient_medications(
 
     result = (
         supabase.table("medication_schedules")
-        .select("id, medication_name, dosage_description, scheduled_time, supply_status")
+        .select("id, medication_name, dosage_description, scheduled_time, supply_status, reminder_enabled")
         .eq("patient_id", patient_id)
         .execute()
     )
     return [MedicationOut(**m) for m in result.data]
+
+
+@router.post(
+    "/patient/medications", response_model=MedicationOut, status_code=status.HTTP_201_CREATED
+)
+def create_medication(
+    body: MedicationCreateRequest,
+    user: CurrentUser = Depends(require_patient),
+    supabase: Client = Depends(get_supabase_client),
+):
+    """
+    Patients self-report their own medication list (RLS: "patient manages
+    own medications" is a FOR ALL policy on medication_schedules; providers
+    only have SELECT). This is a deliberate design choice already baked
+    into the schema — adherence tracking is against what the patient says
+    they're taking, not a prescription record a provider maintains.
+    """
+    patient_id = get_patient_profile_id(supabase, user.id)
+
+    result = (
+        supabase.table("medication_schedules")
+        .insert(
+            {
+                "patient_id": patient_id,
+                "medication_name": body.medication_name,
+                "dosage_description": body.dosage_description,
+                "scheduled_time": body.scheduled_time,
+                "supply_status": body.supply_status,
+                "reminder_enabled": body.reminder_enabled,
+            }
+        )
+        .execute()
+    )
+    return MedicationOut(**result.data[0])
+
+
+@router.patch("/patient/medications/{medication_id}", response_model=MedicationOut)
+def update_medication(
+    medication_id: str,
+    body: MedicationUpdateRequest,
+    user: CurrentUser = Depends(require_patient),
+    supabase: Client = Depends(get_supabase_client),
+):
+    patient_id = get_patient_profile_id(supabase, user.id)
+
+    existing = one_or_none(
+        supabase.table("medication_schedules")
+        .select("id")
+        .eq("id", medication_id)
+        .eq("patient_id", patient_id)
+    )
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medication not found")
+
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
+    changes["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    result = (
+        supabase.table("medication_schedules")
+        .update(changes)
+        .eq("id", medication_id)
+        .eq("patient_id", patient_id)
+        .execute()
+    )
+    return MedicationOut(**result.data[0])
+
+
+@router.delete("/patient/medications/{medication_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_medication(
+    medication_id: str,
+    user: CurrentUser = Depends(require_patient),
+    supabase: Client = Depends(get_supabase_client),
+):
+    patient_id = get_patient_profile_id(supabase, user.id)
+
+    existing = one_or_none(
+        supabase.table("medication_schedules")
+        .select("id")
+        .eq("id", medication_id)
+        .eq("patient_id", patient_id)
+    )
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medication not found")
+
+    supabase.table("medication_schedules").delete().eq("id", medication_id).eq(
+        "patient_id", patient_id
+    ).execute()
 
 
 @router.post(
@@ -162,6 +259,8 @@ def create_bp_reading(
                 "patient_id": patient_id,
                 "systolic": body.systolic,
                 "diastolic": body.diastolic,
+                "pulse": body.pulse,
+                "notes": body.notes,
                 "measured_at": measured_at.isoformat(),
                 "recorded_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -180,7 +279,7 @@ def list_bp_readings(
 
     result = (
         supabase.table("blood_pressure_readings")
-        .select("id, systolic, diastolic, measured_at, recorded_at")
+        .select("id, systolic, diastolic, pulse, notes, measured_at, recorded_at")
         .eq("patient_id", patient_id)
         .order("measured_at", desc=True)
         .execute()
@@ -225,7 +324,7 @@ def patient_history(
     )
     bp_result = (
         supabase.table("blood_pressure_readings")
-        .select("id, systolic, diastolic, measured_at, recorded_at")
+        .select("id, systolic, diastolic, pulse, notes, measured_at, recorded_at")
         .eq("patient_id", patient_id)
         .order("measured_at", desc=True)
         .execute()
@@ -236,7 +335,7 @@ def patient_history(
     for row in check_ins_result.data:
         assessment_result = (
             supabase.table("risk_assessments")
-            .select("rule_result_level, final_level, ai_status")
+            .select("rule_result_level, final_level, ai_status, provider_summary")
             .eq("check_in_id", row["id"])
             .order("created_at", desc=True)
             .limit(1)
@@ -253,6 +352,7 @@ def patient_history(
                         rule_result_level=assessment_row["rule_result_level"],
                         final_level=assessment_row["final_level"],
                         ai_status=assessment_row["ai_status"],
+                        provider_summary=assessment_row["provider_summary"],
                     )
                     if assessment_row
                     else None

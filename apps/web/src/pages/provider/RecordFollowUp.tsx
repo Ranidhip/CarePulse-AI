@@ -12,8 +12,17 @@ import FormControlLabel from "@mui/material/FormControlLabel";
 import Radio from "@mui/material/Radio";
 import RiskBadge from "../../components/RiskBadge";
 import { api } from "../../lib/providerApi";
-import type { AlertStatus, ContactMethod, PatientDetail } from "../../types";
-import { ALERT_STATUSES, CONTACT_METHODS } from "../../types";
+import { followUpFormSchema, validateOrError } from "../../lib/validation";
+import type { AlertStatus, ContactMethod, FollowUpOutcome, PatientDetail } from "../../types";
+import { ALERT_STATUSES, CONTACT_METHODS, FOLLOW_UP_OUTCOME_LABELS } from "../../types";
+
+const OUTCOME_OPTIONS: FollowUpOutcome[] = [
+  "contacted",
+  "unreachable",
+  "referred_to_doctor",
+  "medication_supply_issue_reported",
+  "other",
+];
 
 export default function RecordFollowUp() {
   const { patientId } = useParams<{ patientId: string }>();
@@ -22,8 +31,9 @@ export default function RecordFollowUp() {
   const [loading, setLoading] = useState(true);
 
   const [contactMethod, setContactMethod] = useState<ContactMethod>("Phone");
+  const [outcome, setOutcome] = useState<FollowUpOutcome>("contacted");
   const [notes, setNotes] = useState("");
-  const [nextAction, setNextAction] = useState("");
+  const [nextAdvice, setNextAdvice] = useState("");
   const [alertStatus, setAlertStatus] = useState<AlertStatus>("New");
   const [nextActionDate, setNextActionDate] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -39,8 +49,9 @@ export default function RecordFollowUp() {
 
   async function handleSave() {
     if (!patientId) return;
-    if (!notes.trim()) {
-      setError("Notes are required before an alert can be marked Resolved or saved.");
+    const validation = validateOrError(followUpFormSchema, { notes, next_advice: nextAdvice });
+    if (!validation.ok) {
+      setError(validation.error);
       return;
     }
     setError(null);
@@ -48,10 +59,11 @@ export default function RecordFollowUp() {
     try {
       await api.createFollowUp(patientId, {
         contact_method: contactMethod,
-        notes: notes.trim(),
-        next_action: nextAction.trim() || null,
+        notes: validation.data.notes,
+        next_advice: validation.data.next_advice || null,
         alert_status: alertStatus,
         next_action_date: nextActionDate || null,
+        outcome,
       });
       navigate(`/provider/patients/${patientId}/history`);
     } catch (e) {
@@ -105,6 +117,38 @@ export default function RecordFollowUp() {
           ))}
         </RadioGroup>
 
+        <Box sx={{ display: "flex", gap: 2, mb: 2 }}>
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="body2" sx={{ mb: 0.5 }}>
+              Outcome
+            </Typography>
+            <Select
+              fullWidth
+              size="small"
+              value={outcome}
+              onChange={(e) => setOutcome(e.target.value as FollowUpOutcome)}
+            >
+              {OUTCOME_OPTIONS.map((o) => (
+                <MenuItem key={o} value={o}>
+                  {FOLLOW_UP_OUTCOME_LABELS[o]}
+                </MenuItem>
+              ))}
+            </Select>
+          </Box>
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="body2" sx={{ mb: 0.5 }}>
+              Alert status
+            </Typography>
+            <Select fullWidth size="small" value={alertStatus} onChange={(e) => setAlertStatus(e.target.value as AlertStatus)}>
+              {ALERT_STATUSES.map((s) => (
+                <MenuItem key={s} value={s}>
+                  {s}
+                </MenuItem>
+              ))}
+            </Select>
+          </Box>
+        </Box>
+
         <Typography variant="body2" sx={{ mb: 0.5 }}>
           Notes
         </Typography>
@@ -119,41 +163,27 @@ export default function RecordFollowUp() {
         />
 
         <Typography variant="body2" sx={{ mb: 0.5 }}>
-          Next action
+          Next advice
         </Typography>
         <TextField
           fullWidth
-          placeholder="Call again in one week to confirm medicine supply and reminder."
-          value={nextAction}
-          onChange={(e) => setNextAction(e.target.value)}
+          placeholder="Continue current medicines, record BP daily for one week and attend clinic on 27 Aug."
+          value={nextAdvice}
+          onChange={(e) => setNextAdvice(e.target.value)}
           sx={{ mb: 2 }}
         />
 
-        <Box sx={{ display: "flex", gap: 2 }}>
-          <Box sx={{ flex: 1 }}>
-            <Typography variant="body2" sx={{ mb: 0.5 }}>
-              Alert status
-            </Typography>
-            <Select fullWidth size="small" value={alertStatus} onChange={(e) => setAlertStatus(e.target.value as AlertStatus)}>
-              {ALERT_STATUSES.map((s) => (
-                <MenuItem key={s} value={s}>
-                  {s}
-                </MenuItem>
-              ))}
-            </Select>
-          </Box>
-          <Box sx={{ flex: 1 }}>
-            <Typography variant="body2" sx={{ mb: 0.5 }}>
-              Next action date
-            </Typography>
-            <TextField
-              fullWidth
-              size="small"
-              type="date"
-              value={nextActionDate}
-              onChange={(e) => setNextActionDate(e.target.value)}
-            />
-          </Box>
+        <Box sx={{ maxWidth: 260 }}>
+          <Typography variant="body2" sx={{ mb: 0.5 }}>
+            Next action date
+          </Typography>
+          <TextField
+            fullWidth
+            size="small"
+            type="date"
+            value={nextActionDate}
+            onChange={(e) => setNextActionDate(e.target.value)}
+          />
         </Box>
 
         <Box sx={{ border: "1px dashed #C9CCD1", borderRadius: 1, p: 1.5, mt: 2, minHeight: 40 }}>

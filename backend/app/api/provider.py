@@ -11,12 +11,13 @@ generated follow-up tasks. Raw prompts, tool inputs/outputs, model
 payloads, and internal errors never leave these routes.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from supabase import Client
 
 from app.api.deps import AssignedProviderContext, require_assigned_patient, require_provider
+from app.core.db import one_or_none
 from app.core.security import CurrentUser, get_supabase_client
 from app.models.checkins import CheckInRecord
 from app.models.common import BPReadingOut, MedicationOut
@@ -34,8 +35,14 @@ from app.models.provider import (
     FollowUpTaskStatus,
     PatientDetailOut,
     PatientSummaryOut,
+    ColleagueOut,
     QueueRowOut,
+    ReassignPatientRequest,
     RiskAssessmentDetailOut,
+    RiskAssessmentFeedbackOut,
+    RiskAssessmentFeedbackRequest,
+    RiskAssessmentOverrideOut,
+    RiskAssessmentOverrideRequest,
     RiskReasonOut,
     TimelineEntryOut,
 )
@@ -107,6 +114,47 @@ def _reasons_for_assessment(supabase: Client, assessment_id: str) -> list[RiskRe
     return [RiskReasonOut(**r) for r in result.data]
 
 
+def _apply_alert_status(supabase: Client, alert_id: str, new_status: str, provider_id: str) -> dict:
+    """
+    Shared by PATCH /provider/alerts/{id} and the alert_status field on
+    POST .../follow-ups (see FollowUpActionCreateRequest.alert_status) —
+    the one place that actually changes alerts.status, so both call
+    sites resolve/acknowledge an alert the same way.
+    """
+    update_fields: dict = {"status": new_status}
+    if new_status == "acknowledged":
+        update_fields["acknowledged_at"] = datetime.now(timezone.utc).isoformat()
+        update_fields["acknowledged_by"] = provider_id
+    result = supabase.table("alerts").update(update_fields).eq("id", alert_id).execute()
+    return result.data[0]
+
+
+def _get_assessment_with_patient_or_404(supabase: Client, assessment_id: str) -> tuple[dict, str]:
+    """
+    Loads a risk_assessments row plus the patient_id it belongs to (via
+    its check_in), for routes keyed by assessment_id rather than
+    patient_id — mirrors get_alert_or_404's "load first, caller checks
+    has_active_assignment() separately" split.
+    """
+    assessment = one_or_none(
+        supabase.table("risk_assessments").select("*").eq("id", assessment_id)
+    )
+    if assessment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Risk assessment not found"
+        )
+    check_in = one_or_none(
+        supabase.table("weekly_check_ins")
+        .select("patient_id")
+        .eq("id", assessment["check_in_id"])
+    )
+    if check_in is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Risk assessment not found"
+        )
+    return assessment, check_in["patient_id"]
+
+
 def _earliest_unresolved_alert(supabase: Client, patient_id: str) -> dict | None:
     result = (
         supabase.table("alerts")
@@ -128,9 +176,18 @@ def _compute_tier(assessment_row: dict | None) -> str:
     "pending" covers both "no check-in yet" and "low risk but flagged for
     manual review", so a flagged-but-otherwise-low case doesn't get lost
     below every other patient.
+
+    A provider override (.get(), since the column only exists once
+    20260825070000_risk_assessment_override.sql has been applied) always
+    wins outright, in either direction — it IS the completed manual
+    review, so it resolves "pending" the same way a high/medium
+    final_level does.
     """
     if assessment_row is None:
         return "pending"
+    override = assessment_row.get("provider_override_level")
+    if override:
+        return override
     level = assessment_row["final_level"]
     if level in ("high", "medium"):
         return level
@@ -168,6 +225,21 @@ def dashboard_summary(
             check_ins_received += 1
         tiers.append(_compute_tier(assessment_row))
 
+    # Distinct from check_ins_received above (which counts PATIENTS who
+    # have ever submitted at least one check-in, not check-ins in any
+    # time window) — this counts actual check-in ROWS received in the
+    # last 7 days, across all assigned patients, for the dashboard's
+    # "Check-ins This Week" stat.
+    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    check_ins_this_week = len(
+        supabase.table("weekly_check_ins")
+        .select("id")
+        .in_("patient_id", patient_ids or [_NO_MATCH_SENTINEL])
+        .gte("server_received_at", week_ago)
+        .execute()
+        .data
+    )
+
     return DashboardSummaryOut(
         total_patients=len(patient_ids),
         high_risk=tiers.count("high"),
@@ -175,6 +247,7 @@ def dashboard_summary(
         pending_review=tiers.count("pending"),
         low_risk=tiers.count("low"),
         check_ins_received=check_ins_received,
+        check_ins_this_week=check_ins_this_week,
     )
 
 
@@ -232,6 +305,9 @@ def priority_queue(
             age=patient_row["age"],
             tier=tier,
             final_level=assessment_row["final_level"] if assessment_row else None,
+            provider_override_level=(
+                assessment_row.get("provider_override_level") if assessment_row else None
+            ),
             reason_codes=reasons,
             requires_manual_review=(
                 assessment_row["requires_manual_review"] if assessment_row else False
@@ -265,13 +341,13 @@ def patient_detail(
 
     medications_result = (
         supabase.table("medication_schedules")
-        .select("id, medication_name, dosage_description, scheduled_time, supply_status")
+        .select("id, medication_name, dosage_description, scheduled_time, supply_status, reminder_enabled")
         .eq("patient_id", patient_id)
         .execute()
     )
     bp_result = (
         supabase.table("blood_pressure_readings")
-        .select("id, systolic, diastolic, measured_at, recorded_at")
+        .select("id, systolic, diastolic, pulse, notes, measured_at, recorded_at")
         .eq("patient_id", patient_id)
         .order("measured_at", desc=True)
         .limit(1)
@@ -291,6 +367,8 @@ def patient_detail(
                     for k in (
                         "id",
                         "rule_result_level",
+                        "ai_suggested_level",
+                        "ai_confidence",
                         "final_level",
                         "ai_status",
                         "requires_manual_review",
@@ -300,6 +378,19 @@ def patient_detail(
                     )
                 },
                 reasons=_reasons_for_assessment(supabase, assessment_row["id"]),
+                # .get(), not direct indexing: these columns only exist once
+                # supabase/migrations/20260820090000_risk_assessment_flags.sql
+                # has been applied — falls back to the model's defaults
+                # (no feedback recorded) until then, rather than a KeyError.
+                feedback=assessment_row.get("feedback"),
+                feedback_at=assessment_row.get("feedback_at"),
+                feedback_note=assessment_row.get("feedback_note"),
+                # .get(), not direct indexing: these columns only exist once
+                # 20260825070000_risk_assessment_override.sql has been
+                # applied — falls back to "no override recorded" until then.
+                provider_override_level=assessment_row.get("provider_override_level"),
+                provider_override_at=assessment_row.get("provider_override_at"),
+                provider_override_reason=assessment_row.get("provider_override_reason"),
             )
         latest_check_in = CheckInWithAssessmentOut(
             check_in=CheckInRecord(**check_in_row), assessment=assessment_detail
@@ -336,6 +427,77 @@ def patient_detail(
 
 
 # --- Timeline ------------------------------------------------------------
+
+
+@router.get("/provider/colleagues", response_model=list[ColleagueOut])
+def list_colleagues(
+    user: CurrentUser = Depends(require_provider),
+    supabase: Client = Depends(get_supabase_client),
+):
+    """Every other provider — populates the "Reassign to" dropdown."""
+    provider_id = get_provider_profile_id(supabase, user.id)
+    result = (
+        supabase.table("provider_profiles")
+        .select("id, full_name")
+        .neq("id", provider_id)
+        .order("full_name")
+        .execute()
+    )
+    return [ColleagueOut(**r) for r in result.data]
+
+
+@router.post("/provider/patients/{patient_id}/reassign", status_code=status.HTTP_204_NO_CONTENT)
+def reassign_patient(
+    patient_id: str,
+    body: ReassignPatientRequest,
+    assignment: AssignedProviderContext = Depends(require_assigned_patient),
+    supabase: Client = Depends(get_supabase_client),
+):
+    """
+    Moves this patient from the calling provider to another one: the
+    caller's own assignment is deactivated and the target provider's is
+    activated (reusing a prior assignment row for that pair if one
+    exists, rather than accumulating duplicates). patient_provider_
+    assignments' own assigned_at/unassigned_at timestamps are the audit
+    trail — there's no separate reassignment log table.
+
+    Once this returns, the calling provider loses access to this patient
+    (require_assigned_patient will 404 for them from here on), so this is
+    a one-way action from their point of view.
+    """
+    if body.to_provider_id == assignment.provider_profile_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot reassign a patient to yourself",
+        )
+    target_provider = one_or_none(
+        supabase.table("provider_profiles").select("id").eq("id", body.to_provider_id)
+    )
+    if target_provider is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Provider not found")
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    supabase.table("patient_provider_assignments").update(
+        {"is_active": False, "unassigned_at": now}
+    ).eq("patient_id", patient_id).eq("provider_id", assignment.provider_profile_id).eq(
+        "is_active", True
+    ).execute()
+
+    existing_target_assignment = one_or_none(
+        supabase.table("patient_provider_assignments")
+        .select("id")
+        .eq("patient_id", patient_id)
+        .eq("provider_id", body.to_provider_id)
+    )
+    if existing_target_assignment is not None:
+        supabase.table("patient_provider_assignments").update(
+            {"is_active": True, "assigned_at": now, "unassigned_at": None}
+        ).eq("id", existing_target_assignment["id"]).execute()
+    else:
+        supabase.table("patient_provider_assignments").insert(
+            {"patient_id": patient_id, "provider_id": body.to_provider_id, "is_active": True}
+        ).execute()
 
 
 @router.get("/provider/patients/{patient_id}/timeline", response_model=list[TimelineEntryOut])
@@ -405,6 +567,27 @@ def patient_timeline(
 # --- Follow-up actions -----------------------------------------------------
 
 
+@router.get("/provider/patients/{patient_id}/bp-readings", response_model=list[BPReadingOut])
+def patient_bp_readings(
+    patient_id: str,
+    assignment: AssignedProviderContext = Depends(require_assigned_patient),
+    supabase: Client = Depends(get_supabase_client),
+):
+    """
+    Full BP reading history for a patient, oldest first — used by the
+    provider dashboard's BP trend chart. patient_detail() above only ever
+    returns the single latest reading, which isn't enough to plot a trend.
+    """
+    result = (
+        supabase.table("blood_pressure_readings")
+        .select("id, systolic, diastolic, pulse, notes, measured_at, recorded_at")
+        .eq("patient_id", patient_id)
+        .order("measured_at", desc=False)
+        .execute()
+    )
+    return [BPReadingOut(**r) for r in result.data]
+
+
 @router.get("/provider/patients/{patient_id}/follow-ups", response_model=list[FollowUpActionOut])
 def list_follow_ups(
     patient_id: str,
@@ -458,6 +641,15 @@ def create_follow_up(
         )
         .execute()
     )
+
+    # Actually change the alert's own status when the caller asked for
+    # that — without this, picking "Resolved" in the follow-up form only
+    # updated this follow_up_actions row and left the alert open forever.
+    if body.alert_status is not None and body.alert_status != alert["status"]:
+        _apply_alert_status(
+            supabase, body.alert_id, body.alert_status, assignment.provider_profile_id
+        )
+
     return FollowUpActionOut(**result.data[0])
 
 
@@ -479,13 +671,107 @@ def update_alert(
         # must look identical to "alert not found".
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
 
-    update_fields: dict = {"status": body.status}
-    if body.status == "acknowledged":
-        update_fields["acknowledged_at"] = datetime.now(timezone.utc).isoformat()
-        update_fields["acknowledged_by"] = provider_id
+    return AlertOut(**_apply_alert_status(supabase, alert_id, body.status, provider_id))
 
-    result = supabase.table("alerts").update(update_fields).eq("id", alert_id).execute()
-    return AlertOut(**result.data[0])
+
+# --- Risk assessment feedback -----------------------------------------------
+
+
+@router.patch(
+    "/provider/risk-assessments/{assessment_id}/feedback",
+    response_model=RiskAssessmentFeedbackOut,
+)
+def submit_risk_assessment_feedback(
+    assessment_id: str,
+    body: RiskAssessmentFeedbackRequest,
+    user: CurrentUser = Depends(require_provider),
+    supabase: Client = Depends(get_supabase_client),
+):
+    """
+    Records a provider's Helpful / Not helpful / Report an issue verdict
+    on the AI-generated summary for this assessment (Risk Assessment
+    Review screen). This never edits or removes the original summary —
+    it only adds feedback alongside it, so the audit trail stays intact.
+
+    Requires supabase/migrations/20260820090000_risk_assessment_flags.sql
+    to have been applied — without it, the underlying columns don't
+    exist and this route 500s. Not gated behind a settings flag because
+    a clear failure here is preferable to a route that looks like it
+    works but silently no-ops.
+    """
+    provider_id = get_provider_profile_id(supabase, user.id)
+    _, patient_id = _get_assessment_with_patient_or_404(supabase, assessment_id)
+    if not has_active_assignment(supabase, provider_id, patient_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Risk assessment not found"
+        )
+
+    result = (
+        supabase.table("risk_assessments")
+        .update(
+            {
+                "feedback": body.feedback,
+                "feedback_at": datetime.now(timezone.utc).isoformat(),
+                "feedback_by": provider_id,
+                "feedback_note": body.feedback_note,
+            }
+        )
+        .eq("id", assessment_id)
+        .execute()
+    )
+    return RiskAssessmentFeedbackOut(**result.data[0])
+
+
+@router.patch(
+    "/provider/risk-assessments/{assessment_id}/override",
+    response_model=RiskAssessmentOverrideOut,
+)
+def override_risk_assessment(
+    assessment_id: str,
+    body: RiskAssessmentOverrideRequest,
+    user: CurrentUser = Depends(require_provider),
+    supabase: Client = Depends(get_supabase_client),
+):
+    """
+    Records a provider's own risk-level decision for this assessment,
+    with a required reason. This is the human clinical decision the
+    Risk Assessment Review screen's "Manual review status" area was
+    previously just a static "Provider decision pending" label for.
+
+    Distinct from the AI-safety floor rule (AI may only ever raise the
+    rule-derived level, never lower it): a provider override is a
+    licensed clinician's final judgment and may move the level in either
+    direction. It never edits rule_result_level, ai_suggested_level, or
+    final_level — those stay exactly as computed, so what the system
+    concluded and what the provider decided both remain visible.
+
+    Requires
+    supabase/migrations/20260825070000_risk_assessment_override.sql to
+    have been applied — without it, the underlying columns don't exist
+    and this route 500s, same fail-loud pattern as the feedback endpoint
+    above.
+    """
+    provider_id = get_provider_profile_id(supabase, user.id)
+    _, patient_id = _get_assessment_with_patient_or_404(supabase, assessment_id)
+    if not has_active_assignment(supabase, provider_id, patient_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Risk assessment not found"
+        )
+
+    result = (
+        supabase.table("risk_assessments")
+        .update(
+            {
+                "provider_override_level": body.level,
+                "provider_override_at": datetime.now(timezone.utc).isoformat(),
+                "provider_override_by": provider_id,
+                "provider_override_reason": body.reason,
+            }
+        )
+        .eq("id", assessment_id)
+        .execute()
+    )
+    return RiskAssessmentOverrideOut(**result.data[0])
 
 
 # --- Agent workflow evidence ----------------------------------------------

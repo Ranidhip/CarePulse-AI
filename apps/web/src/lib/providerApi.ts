@@ -15,6 +15,7 @@ import type {
   ApiMedication,
   ContactMethod,
   DashboardSummary,
+  FollowUpOutcome,
   FollowUpTask,
   FollowUpTaskStatus,
   PatientDetail,
@@ -23,6 +24,7 @@ import type {
   ReasonCode,
   RiskLevel,
 } from "../types";
+import { REASON_CODE_LABELS } from "../types";
 import { expireProviderSession, getProviderSession } from "./providerSessionStore";
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -128,6 +130,7 @@ interface RawDashboardSummary {
   pending_review: number;
   low_risk: number;
   check_ins_received: number;
+  check_ins_this_week: number;
 }
 
 interface RawQueueRow {
@@ -149,12 +152,15 @@ interface RawMedication {
   dosage_description: string | null;
   scheduled_time: string | null;
   supply_status: string;
+  reminder_enabled: boolean;
 }
 
 interface RawBPReading {
   id: string;
   systolic: number;
   diastolic: number;
+  pulse: number | null;
+  notes: string | null;
   measured_at: string;
   recorded_at: string;
 }
@@ -175,6 +181,8 @@ interface RawCheckIn {
 interface RawAssessment {
   id: string;
   rule_result_level: string;
+  ai_suggested_level: string | null;
+  ai_confidence: number | null;
   final_level: "low" | "medium" | "high";
   ai_status: string;
   requires_manual_review: boolean;
@@ -182,6 +190,10 @@ interface RawAssessment {
   model_version: string | null;
   created_at: string;
   reasons: { reason_code: string; source: string; evidence_text: string | null }[];
+  feedback: "helpful" | "not_helpful" | "reported" | null;
+  provider_override_level: "low" | "medium" | "high" | null;
+  provider_override_at: string | null;
+  provider_override_reason: string | null;
 }
 
 interface RawAlert {
@@ -189,6 +201,20 @@ interface RawAlert {
   patient_id: string;
   status: "open" | "acknowledged" | "resolved";
   created_at: string;
+}
+
+export interface BPTrendPoint {
+  id: string;
+  systolic: number;
+  diastolic: number;
+  measuredAt: string;
+}
+
+export interface TimelineEntry {
+  entry_type: "check_in" | "alert" | "follow_up";
+  occurred_at: string;
+  summary: string;
+  data: Record<string, unknown>;
 }
 
 interface RawFollowUpAction {
@@ -216,13 +242,11 @@ interface RawPatientDetail {
   follow_ups: RawFollowUpAction[];
 }
 
-const REASON_LABELS: Record<string, string> = {
-  MEDICATION_STOPPED: "Medication stopped",
-  ABNORMAL_BP: "Elevated BP recorded",
-  MISSED_DOSES: "Missed medication",
-  LOW_SUPPLY: "Medicine supply low",
-  SCHEDULE_DIFFICULTY: "Treatment difficulty reported",
-};
+// Was a second, independently-drifted copy of REASON_CODE_LABELS (with
+// only 5 of the 8 real reason codes) — reusing the one source of truth
+// from ../types instead, so this can't silently go stale again the way
+// it did here (caught via a live API check, not typechecking).
+const REASON_LABELS: Record<string, string> = REASON_CODE_LABELS;
 
 function providerFromSession(session: SessionResponse): ProviderProfile {
   const localName = session.user.email.split("@")[0].replace(/[._-]+/g, " ");
@@ -257,14 +281,51 @@ function mapQueueRow(row: RawQueueRow): QueueRow {
   };
 }
 
+// createFollowUp (below) joins notes and next-advice into one string as
+// `${notes}\nNext advice: ${nextAdvice}` before sending it as note_text —
+// follow_up_actions has no separate column for it (see
+// backend/supabase/migrations). Split that back apart here so the two
+// fields display separately again on read, matching what was actually
+// typed into the form's two separate inputs. Safe to assume a leading
+// "\n" whenever a next-advice segment is present: RecordFollowUp.tsx
+// requires non-empty notes before it will submit at all, so the
+// "next-advice but no notes" case createFollowUp's .filter(Boolean)
+// otherwise allows for never happens through the real UI.
+// The OLD prefix ("Next action: ") is also checked, for follow-ups saved
+// before this field was renamed to match the "Next advice" wording in
+// the current design — those rows would otherwise show their advice
+// text as part of Notes instead of splitting out correctly.
+const NEXT_ADVICE_PREFIX = "\nNext advice: ";
+const LEGACY_NEXT_ACTION_PREFIX = "\nNext action: ";
+
+function splitNoteText(noteText: string | null): { notes: string | null; nextAdvice: string | null } {
+  if (!noteText) return { notes: noteText, nextAdvice: null };
+  const idx = noteText.indexOf(NEXT_ADVICE_PREFIX);
+  if (idx !== -1) {
+    return {
+      notes: noteText.slice(0, idx) || null,
+      nextAdvice: noteText.slice(idx + NEXT_ADVICE_PREFIX.length) || null,
+    };
+  }
+  const legacyIdx = noteText.indexOf(LEGACY_NEXT_ACTION_PREFIX);
+  if (legacyIdx !== -1) {
+    return {
+      notes: noteText.slice(0, legacyIdx) || null,
+      nextAdvice: noteText.slice(legacyIdx + LEGACY_NEXT_ACTION_PREFIX.length) || null,
+    };
+  }
+  return { notes: noteText, nextAdvice: null };
+}
+
 function mapFollowUp(row: RawFollowUpAction, patientId: string): ApiFollowUp {
+  const { notes, nextAdvice } = splitNoteText(row.note_text);
   return {
     id: row.id,
     patient_id: patientId,
     provider_id: row.provider_id,
     contact_method: row.action_type === "phone_call" ? "Phone" : "Other",
-    notes: row.note_text,
-    next_action: null,
+    notes,
+    next_advice: nextAdvice,
     alert_status:
       row.status === "completed"
         ? "Resolved"
@@ -274,6 +335,10 @@ function mapFollowUp(row: RawFollowUpAction, patientId: string): ApiFollowUp {
     next_action_date: null,
     created_at: row.created_at,
   };
+}
+
+function asRiskLevel(value: string | null | undefined): RiskLevel | null {
+  return value === "low" || value === "medium" || value === "high" ? value : null;
 }
 
 function mapPatientDetail(raw: RawPatientDetail): PatientDetail {
@@ -298,7 +363,7 @@ function mapPatientDetail(raw: RawPatientDetail): PatientDetail {
       difficulty_reported: checkIn.difficulty_reported ? 1 : 0,
       difficulty_text: checkIn.difficulty_text,
       patient_submitted_at: checkIn.patient_submitted_at,
-      risk_level: assessment?.final_level ?? "low",
+      risk_level: assessment?.provider_override_level ?? assessment?.final_level ?? "low",
       reason_codes: reasonCodes,
       rule_version: "backend-authoritative",
       summary: assessment?.provider_summary ?? "No AI summary available.",
@@ -311,7 +376,7 @@ function mapPatientDetail(raw: RawPatientDetail): PatientDetail {
     name: medication.medication_name,
     instructions: medication.dosage_description ?? "No dosage description recorded",
     scheduled_time: medication.scheduled_time ?? "Not scheduled",
-    reminder_on: 0,
+    reminder_on: medication.reminder_enabled ? 1 : 0,
   }));
 
   return {
@@ -327,12 +392,23 @@ function mapPatientDetail(raw: RawPatientDetail): PatientDetail {
       ? {
           ...raw.latest_bp,
           patient_id: raw.profile.id,
-          pulse: null,
-          notes: null,
         }
       : null,
-    riskLevel: assessment?.final_level ?? "pending",
+    riskLevel: assessment?.provider_override_level ?? assessment?.final_level ?? "pending",
+    ruleResultLevel: asRiskLevel(assessment?.rule_result_level),
+    aiSuggestedLevel: asRiskLevel(assessment?.ai_suggested_level),
+    aiConfidence: assessment?.ai_confidence ?? null,
+    assessmentId: assessment?.id ?? null,
+    feedback: assessment?.feedback ?? null,
+    providerOverrideLevel: assessment?.provider_override_level ?? null,
+    providerOverrideAt: assessment?.provider_override_at ?? null,
+    providerOverrideReason: assessment?.provider_override_reason ?? null,
     followUps: raw.follow_ups.map((followUp) => mapFollowUp(followUp, raw.profile.id)),
+    openAlerts: raw.open_alerts.map((alert) => ({
+      id: alert.id,
+      status: alert.status,
+      createdAt: alert.created_at,
+    })),
   };
 }
 
@@ -344,6 +420,18 @@ function followUpStatusFor(status: AlertStatus): RawFollowUpAction["status"] {
   if (status === "Resolved") return "completed";
   if (status === "In Progress") return "in_progress";
   return "needs_review";
+}
+
+// alerts.status only has three values, but the follow-up form's "Alert
+// status" dropdown has four (matching the mockup) — "Follow-up Recorded"
+// has no dedicated DB state of its own, so it maps to "acknowledged"
+// (the alert has been acted on but isn't closed out yet), same as
+// "In Progress". "New" maps to "open" so re-selecting it is a no-op
+// rather than accidentally reopening/touching an already-progressed alert.
+function dbAlertStatusFor(status: AlertStatus): "open" | "acknowledged" | "resolved" {
+  if (status === "Resolved") return "resolved";
+  if (status === "New") return "open";
+  return "acknowledged";
 }
 
 export const api = {
@@ -367,6 +455,7 @@ export const api = {
       mediumRisk: summary.medium_risk,
       pendingReview: summary.pending_review,
       checkInsReceived: summary.check_ins_received,
+      checkInsThisWeek: summary.check_ins_this_week,
       recentAlerts: [],
     };
   },
@@ -382,14 +471,37 @@ export const api = {
     return mapPatientDetail(detail);
   },
 
+  async getColleagues(): Promise<{ id: string; fullName: string }[]> {
+    const colleagues = await request<{ id: string; full_name: string }[]>("/provider/colleagues");
+    return colleagues.map((c) => ({ id: c.id, fullName: c.full_name }));
+  },
+
+  async reassignPatient(patientId: string, toProviderId: string): Promise<void> {
+    await request(`/provider/patients/${patientId}/reassign`, {
+      method: "POST",
+      body: { to_provider_id: toProviderId },
+    });
+  },
+
+  async getBPHistory(patientId: string): Promise<BPTrendPoint[]> {
+    const readings = await request<RawBPReading[]>(`/provider/patients/${patientId}/bp-readings`);
+    return readings.map((r) => ({
+      id: r.id,
+      systolic: r.systolic,
+      diastolic: r.diastolic,
+      measuredAt: r.measured_at,
+    }));
+  },
+
   async createFollowUp(
     patientId: string,
     input: {
       contact_method: ContactMethod;
       notes: string | null;
-      next_action: string | null;
+      next_advice: string | null;
       alert_status: AlertStatus;
       next_action_date: string | null;
+      outcome: FollowUpOutcome;
     },
   ): Promise<ApiFollowUp> {
     const detail = await request<RawPatientDetail>(`/provider/patients/${patientId}`);
@@ -397,7 +509,7 @@ export const api = {
     if (!alert) {
       throw new ApiError(422, "This patient has no open alert to attach a follow-up to.");
     }
-    const note = [input.notes, input.next_action ? `Next action: ${input.next_action}` : null]
+    const note = [input.notes, input.next_advice ? `Next advice: ${input.next_advice}` : null]
       .filter(Boolean)
       .join("\n");
     const result = await request<RawFollowUpAction>(
@@ -408,8 +520,9 @@ export const api = {
           alert_id: alert.id,
           action_type: actionTypeFor(input.contact_method),
           note_text: note || null,
-          outcome: input.contact_method === "Unable to Reach" ? "unreachable" : "other",
+          outcome: input.outcome,
           status: followUpStatusFor(input.alert_status),
+          alert_status: dbAlertStatusFor(input.alert_status),
         },
       },
     );
@@ -423,8 +536,48 @@ export const api = {
     return rows.map((row) => mapFollowUp(row, patientId));
   },
 
+  getTimeline(patientId: string) {
+    return request<TimelineEntry[]>(`/provider/patients/${patientId}/timeline`);
+  },
+
   getAgentRuns(patientId: string) {
     return request<AgentRun[]>(`/provider/patients/${patientId}/agent-runs`);
+  },
+
+  async acknowledgeAlert(alertId: string): Promise<void> {
+    await request(`/provider/alerts/${alertId}`, {
+      method: "PATCH",
+      body: { status: "acknowledged" },
+    });
+  },
+
+  async dismissAlertAsNotUrgent(alertId: string): Promise<void> {
+    await request(`/provider/alerts/${alertId}`, {
+      method: "PATCH",
+      body: { status: "resolved" },
+    });
+  },
+
+  async submitRiskAssessmentFeedback(
+    assessmentId: string,
+    feedback: "helpful" | "not_helpful" | "reported",
+    feedbackNote: string | null,
+  ): Promise<void> {
+    await request(`/provider/risk-assessments/${assessmentId}/feedback`, {
+      method: "PATCH",
+      body: { feedback, feedback_note: feedbackNote },
+    });
+  },
+
+  async submitRiskAssessmentOverride(
+    assessmentId: string,
+    level: "low" | "medium" | "high",
+    reason: string,
+  ): Promise<void> {
+    await request(`/provider/risk-assessments/${assessmentId}/override`, {
+      method: "PATCH",
+      body: { level, reason },
+    });
   },
 
   getFollowUpTasks(status?: FollowUpTaskStatus) {

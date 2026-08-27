@@ -1,9 +1,19 @@
 /**
- * Types mirroring the actual JSON shapes returned by backend/app/api/
- * demo_patient.py. Field names intentionally match the API responses
- * (mostly snake_case, matching FastAPI's raw dict returns) rather than
- * being renamed to camelCase, so there is no silent mapping layer to
- * drift out of sync with the backend.
+ * View-model types for the mobile app, mapped from the real production
+ * API's JSON shapes (backend/app/api/patient.py, checkins.py, auth.py) —
+ * this app no longer talks to backend/app/api/demo_patient.py's SQLite-
+ * backed /demo/* routes. Mapping from the raw snake_case API responses to
+ * these types happens entirely inside api/client.ts, mirroring the same
+ * pattern apps/web/src/lib/providerApi.ts already uses for the provider
+ * dashboard.
+ *
+ * Two things are deliberately different from the old demo-mode shapes:
+ *  - Real booleans throughout (no more SQLite 0/1 integers).
+ *  - Reason codes, AI evidence, and the AI-generated provider summary are
+ *    NEVER sent to the patient by the production API (see patient.py's
+ *    "no clinical content on the patient confirmation/history screens"
+ *    rule) — only the calculated risk level is. Screens that used to show
+ *    reason codes/summary to the patient have been adjusted accordingly.
  */
 
 export type RiskLevel = "low" | "medium" | "high";
@@ -14,21 +24,6 @@ export const SUPPLY_LABELS: Record<SupplyBucket, string> = {
   "3-6": "3-6 days",
   "0-2": "0-2 days",
   none: "No medicine remaining",
-};
-
-export type ReasonCode =
-  | "MEDICATION_STOPPED"
-  | "ABNORMAL_BP"
-  | "MISSED_DOSES"
-  | "LOW_SUPPLY"
-  | "SCHEDULE_DIFFICULTY";
-
-export const REASON_CODE_LABELS: Record<ReasonCode, string> = {
-  MEDICATION_STOPPED: "Medication stopped",
-  ABNORMAL_BP: "Elevated BP recorded",
-  MISSED_DOSES: "Multiple missed doses",
-  LOW_SUPPLY: "Medicine supply low or depleted",
-  SCHEDULE_DIFFICULTY: "Treatment difficulty reported",
 };
 
 export const DIFFICULTY_OPTIONS = [
@@ -46,49 +41,56 @@ export interface ApiPatient {
   id: string;
   name: string;
   email: string;
-  age: number;
+  age: number | null;
 }
 
 export interface ApiMedication {
   id: string;
-  patient_id: string;
   name: string;
   instructions: string;
-  scheduled_time: string;
-  reminder_on: number; // sqlite boolean (0/1)
+  scheduled_time: string | null;
+  supply_status: string;
+  reminder_enabled: boolean;
 }
 
 export interface ApiBPReading {
   id: string;
-  patient_id: string;
   systolic: number;
   diastolic: number;
   pulse: number | null;
-  measured_at: string;
   notes: string | null;
+  measured_at: string;
+}
+
+export interface ApiRiskAssessmentSummary {
+  rule_result_level: RiskLevel;
+  final_level: RiskLevel;
+  ai_status: string;
 }
 
 export interface ApiCheckIn {
   id: string;
-  patient_id: string;
-  missed_doses: number;
+  missed_doses: boolean;
   missed_dose_count: number | null;
-  medication_stopped: number;
-  supply_bucket: SupplyBucket;
-  supply_remaining: number;
-  systolic: number | null;
-  diastolic: number | null;
-  difficulty_reported: number;
+  medication_stopped: boolean;
+  supply_remaining: boolean;
+  difficulty_reported: boolean;
   difficulty_text: string | null;
   patient_submitted_at: string;
-  risk_level: RiskLevel;
-  reason_codes: ReasonCode[];
-  rule_version: string;
-  summary: string;
+  server_received_at: string;
+  risk_level: RiskLevel | null;
+  /**
+   * AI-generated summary of this check-in. Shown to the patient on the
+   * Check-in Submitted / History screens when risk_level is medium/high
+   * — a deliberate 2026-08-22 policy change (see backend/app/models/
+   * checkins.py's RiskAssessmentSummary docstring for the full history);
+   * this used to be provider-only.
+   */
+  provider_summary: string | null;
 }
 
 export interface ApiHome {
-  patient: { id: string; name: string; age: number };
+  patient: { name: string };
   nextMedication: ApiMedication | null;
   latestCheckIn: ApiCheckIn | null;
   latestBP: ApiBPReading | null;
@@ -122,6 +124,7 @@ export const EMPTY_CHECKIN_DRAFT: CheckInDraft = {
 
 export interface PatientSession {
   accessToken: string;
+  refreshToken: string;
   patientId: string;
   name: string;
   email: string;

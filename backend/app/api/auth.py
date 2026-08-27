@@ -19,9 +19,10 @@ flag — it's an application-level rule, not a Supabase Auth rule.
 from fastapi import APIRouter, Depends, HTTPException, status
 from supabase import Client
 
+from app.core.config import get_settings
 from app.core.db import one_or_none
 from app.core.security import get_anon_supabase_client, get_supabase_client
-from app.models.auth import MeProfile, RefreshRequest, SessionResponse, SignInRequest
+from app.models.auth import MeProfile, PatientSignUpRequest, RefreshRequest, SessionResponse, SignInRequest
 
 router = APIRouter(tags=["auth"])
 
@@ -84,6 +85,100 @@ def sign_in(
 
     profile = _load_active_profile(service_client, auth_user.id)
     return _session_response(session, profile)
+
+
+@router.post(
+    "/auth/sign-up", response_model=SessionResponse, status_code=status.HTTP_201_CREATED
+)
+def patient_sign_up(
+    body: PatientSignUpRequest,
+    anon_client: Client = Depends(get_anon_supabase_client),
+    service_client: Client = Depends(get_supabase_client),
+):
+    """
+    Self-service patient registration — the real signup flow the mobile
+    app's Sign In screen previously had no way to reach (new patients
+    could only be provisioned by an operator running
+    backend/scripts/add_synthetic_patient.py).
+
+    Uses auth.admin.create_user(email_confirm=True) via the SERVICE-role
+    client (never exposed to the app itself — this endpoint is the
+    trusted intermediary), the same way the seeding scripts do, rather
+    than the anon client's own sign_up(). This prototype has no outbound
+    email delivery, so the anon client's normal "confirm via emailed
+    link" flow would leave a new patient permanently unable to sign in;
+    admin-creating with email_confirm=True sidesteps that entirely so
+    signing up and then immediately signing in both actually work.
+
+    New patients are auto-assigned to SEED_PROVIDER_EMAIL's provider —
+    this is a single-clinic prototype with one real provider account, not
+    a multi-clinic registration flow with a provider picker.
+    """
+    settings = get_settings()
+
+    try:
+        created = service_client.auth.admin.create_user(
+            {"email": body.email, "password": body.password, "email_confirm": True}
+        )
+    except Exception as e:
+        if "already" in str(e).lower() or "registered" in str(e).lower():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An account with this email already exists — sign in instead.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Could not create this account."
+        )
+    auth_user = created.user
+
+    service_client.table("users").insert(
+        {"id": auth_user.id, "email": body.email, "role": "patient"}
+    ).execute()
+
+    patient_profile = (
+        service_client.table("patient_profiles")
+        .insert(
+            {
+                "user_id": auth_user.id,
+                "full_name": body.full_name,
+                "age": body.age,
+                "contact_number": body.contact_number,
+            }
+        )
+        .execute()
+    )
+    patient_profile_id = patient_profile.data[0]["id"]
+
+    if settings.seed_provider_email:
+        provider_user_row = one_or_none(
+            service_client.table("users")
+            .select("id")
+            .eq("email", settings.seed_provider_email)
+            .eq("role", "provider")
+        )
+        if provider_user_row is not None:
+            provider_profile_row = one_or_none(
+                service_client.table("provider_profiles")
+                .select("id")
+                .eq("user_id", provider_user_row["id"])
+            )
+            if provider_profile_row is not None:
+                service_client.table("patient_provider_assignments").insert(
+                    {
+                        "patient_id": patient_profile_id,
+                        "provider_id": provider_profile_row["id"],
+                        "is_active": True,
+                    }
+                ).execute()
+
+    # Sign the new patient straight in, the same way /auth/sign-in does,
+    # so submitting the sign-up form takes them directly into the app
+    # rather than back to a sign-in screen they'd have to fill in again.
+    result = anon_client.auth.sign_in_with_password(
+        {"email": body.email, "password": body.password}
+    )
+    profile = _load_active_profile(service_client, auth_user.id)
+    return _session_response(result.session, profile)
 
 
 @router.post("/auth/refresh", response_model=SessionResponse)

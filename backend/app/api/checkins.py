@@ -82,7 +82,7 @@ async def submit_check_in(
         check_in_id = existing_row["id"]
         assessment = (
             supabase.table("risk_assessments")
-            .select("rule_result_level, final_level, ai_status")
+            .select("rule_result_level, final_level, ai_status, provider_summary")
             .eq("check_in_id", check_in_id)
             .order("created_at", desc=True)
             .limit(1)
@@ -95,6 +95,7 @@ async def submit_check_in(
                 rule_result_level=row["rule_result_level"] if row else "low",
                 final_level=row["final_level"] if row else "low",
                 ai_status=row["ai_status"] if row else "pending",
+                provider_summary=row["provider_summary"] if row else None,
             ),
             message="Check-in already received. Returning existing result.",
         )
@@ -277,6 +278,7 @@ async def submit_check_in(
             rule_result_level=rule_result.risk_level,
             final_level=final_level,
             ai_status=ai_status,
+            provider_summary=provider_summary,
         ),
         message=(
             "Check-in received. Analysis in progress."
@@ -326,7 +328,7 @@ def latest_own_check_in(
 
     assessment_result = (
         supabase.table("risk_assessments")
-        .select("rule_result_level, final_level, ai_status")
+        .select("rule_result_level, final_level, ai_status, provider_summary")
         .eq("check_in_id", check_in_row["id"])
         .order("created_at", desc=True)
         .limit(1)
@@ -340,5 +342,6 @@ def latest_own_check_in(
             rule_result_level=assessment_row["rule_result_level"] if assessment_row else "low",
             final_level=assessment_row["final_level"] if assessment_row else "low",
             ai_status=assessment_row["ai_status"] if assessment_row else "pending",
+            provider_summary=assessment_row["provider_summary"] if assessment_row else None,
         ),
     )

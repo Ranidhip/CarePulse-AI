@@ -7,19 +7,30 @@
 
 export type RiskLevel = "low" | "medium" | "high" | "pending";
 
+// Matches backend/supabase/migrations' `reason_code` enum exactly (8
+// values) — this used to list only 5, silently dropping any check-in
+// whose AI- or rule-derived reason was SIDE_EFFECTS, REPEATED_NONRESPONSE,
+// or OTHER from both the Risk Assessment Review chips and the reason-code
+// fallback text (caught via a live API check, not just typechecking).
 export type ReasonCode =
   | "MEDICATION_STOPPED"
   | "ABNORMAL_BP"
   | "MISSED_DOSES"
   | "LOW_SUPPLY"
-  | "SCHEDULE_DIFFICULTY";
+  | "SIDE_EFFECTS"
+  | "SCHEDULE_DIFFICULTY"
+  | "REPEATED_NONRESPONSE"
+  | "OTHER";
 
 export const REASON_CODE_LABELS: Record<ReasonCode, string> = {
   MEDICATION_STOPPED: "Medication stopped",
   ABNORMAL_BP: "Elevated BP recorded",
   MISSED_DOSES: "Multiple missed doses",
   LOW_SUPPLY: "Medicine supply low or depleted",
+  SIDE_EFFECTS: "Side effects reported",
   SCHEDULE_DIFFICULTY: "Treatment difficulty reported",
+  REPEATED_NONRESPONSE: "Repeated non-response to outreach",
+  OTHER: "Other concern flagged",
 };
 
 export const SUPPLY_LABELS: Record<string, string> = {
@@ -77,6 +88,23 @@ export interface ApiCheckIn {
 export const CONTACT_METHODS = ["Phone", "Message", "Clinic Visit", "Unable to Reach", "Other"] as const;
 export type ContactMethod = (typeof CONTACT_METHODS)[number];
 
+// Matches backend/app/models/provider.py's FollowUpOutcome enum exactly —
+// these are the only five values the database column accepts.
+export type FollowUpOutcome =
+  | "contacted"
+  | "unreachable"
+  | "referred_to_doctor"
+  | "medication_supply_issue_reported"
+  | "other";
+
+export const FOLLOW_UP_OUTCOME_LABELS: Record<FollowUpOutcome, string> = {
+  contacted: "Patient contacted — adherence advice given",
+  unreachable: "Unable to reach patient",
+  referred_to_doctor: "Referred to doctor",
+  medication_supply_issue_reported: "Medication supply issue reported",
+  other: "Other",
+};
+
 export const ALERT_STATUSES = ["New", "In Progress", "Follow-up Recorded", "Resolved"] as const;
 export type AlertStatus = (typeof ALERT_STATUSES)[number];
 
@@ -86,7 +114,7 @@ export interface ApiFollowUp {
   provider_id: string;
   contact_method: ContactMethod;
   notes: string | null;
-  next_action: string | null;
+  next_advice: string | null;
   alert_status: AlertStatus;
   next_action_date: string | null;
   created_at: string;
@@ -111,6 +139,7 @@ export interface DashboardSummary {
   mediumRisk: number;
   pendingReview: number;
   checkInsReceived: number;
+  checkInsThisWeek: number;
   recentAlerts: {
     patientId: string;
     patientName: string;
@@ -120,13 +149,32 @@ export interface DashboardSummary {
   }[];
 }
 
+export interface ApiOpenAlert {
+  id: string;
+  status: "open" | "acknowledged" | "resolved";
+  createdAt: string;
+}
+
 export interface PatientDetail {
   patient: ApiPatient;
   medications: ApiMedication[];
   latestCheckIn: ApiCheckIn | null;
   latestBP: ApiBPReading | null;
   riskLevel: RiskLevel;
+  /** The deterministic rule engine's own result, before any AI raise. */
+  ruleResultLevel: RiskLevel | null;
+  /** What the AI suggested, independent of the rule floor and the combined final_level. */
+  aiSuggestedLevel: RiskLevel | null;
+  aiConfidence: number | null;
+  /** id of the latest risk_assessments row — needed to submit feedback on it. */
+  assessmentId: string | null;
+  feedback: "helpful" | "not_helpful" | "reported" | null;
+  /** Set once a provider has overridden the level shown above, with a required reason. */
+  providerOverrideLevel: "low" | "medium" | "high" | null;
+  providerOverrideAt: string | null;
+  providerOverrideReason: string | null;
   followUps: ApiFollowUp[];
+  openAlerts: ApiOpenAlert[];
 }
 
 export interface ProviderProfile {

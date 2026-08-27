@@ -32,11 +32,19 @@ CarePulse-AI/
 
 - [x] Wireframes (Figma)
 - [x] Scope freeze — `docs/00-scope-freeze.md`
-- [x] Project skeleton (this stage)
-- [ ] ERD + API contract
-- [ ] Supabase project + migrations
-- [ ] Client app scaffolds installed (`apps/web`, `apps/mobile`)
-- [ ] Auth + AI prompt design
+- [x] Project skeleton
+- [x] ERD + API contract — `docs/01-erd-api-contract.md`
+- [x] Supabase project + migrations — `supabase/migrations/`
+- [x] Client app scaffolds installed (`apps/web`, `apps/mobile`)
+- [x] Auth + AI prompt design — `docs/03-ai-prompt-design.md`
+- [x] Patient mobile app (login, check-in, BP, history) — `apps/mobile/`
+- [x] Provider web dashboard (queue, risk review, follow-up) — `apps/web/`
+- [x] AI agent workflow (rule engine + 3-agent pipeline, safety backstop) — `backend/app/services/`
+- [ ] Deployment (staging web/backend)
+
+Note: the AI reason-code taxonomy documented in `docs/01-erd-api-contract.md`
+(8 structural codes) supersedes the original 7-category psychosocial
+taxonomy in early planning material — a deliberate Week 1 pivot, not a gap.
 
 ## Setup order
 

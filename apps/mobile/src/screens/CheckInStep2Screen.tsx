@@ -25,14 +25,20 @@ export default function CheckInStep2Screen() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    getDraft().then((d) => {
-      if (d.missedDoses === null || d.medicationStopped === null || d.supplyBucket === null) {
+    getDraft()
+      .then((d) => {
+        if (d.missedDoses === null || d.medicationStopped === null || d.supplyBucket === null) {
+          navigation.reset({ index: 0, routes: [{ name: "CheckInStep1" }] });
+          return;
+        }
+        setDraftState(d);
+        setLoaded(true);
+      })
+      .catch(() => {
+        // Corrupted stored draft — same recovery as the "incomplete draft"
+        // branch above rather than hanging on "Loading…" forever.
         navigation.reset({ index: 0, routes: [{ name: "CheckInStep1" }] });
-        return;
-      }
-      setDraftState(d);
-      setLoaded(true);
-    });
+      });
   }, [navigation]);
 
   function update(patch: Partial<CheckInDraft>) {

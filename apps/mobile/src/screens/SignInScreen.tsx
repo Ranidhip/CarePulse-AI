@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { StyleSheet, Switch, Text, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Switch, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import Screen from "../components/Screen";
@@ -27,18 +27,29 @@ export default function SignInScreen() {
     setError(null);
     setLoading(true);
     try {
-      const { access_token, patient } = await api.signIn(email.trim(), password);
+      const session = await api.signIn(email.trim(), password);
+      // The sign-in response only carries auth identity (id/email/role) —
+      // full_name/age live in the patient profile, fetched separately.
       await setSession({
-        accessToken: access_token,
-        patientId: patient.id,
-        name: patient.name,
-        email: patient.email,
+        accessToken: session.access_token,
+        refreshToken: session.refresh_token,
+        patientId: session.user.id,
+        name: session.user.email,
+        email: session.user.email,
+      });
+      const profile = await api.getProfile();
+      await setSession({
+        accessToken: session.access_token,
+        refreshToken: session.refresh_token,
+        patientId: profile.id,
+        name: profile.name,
+        email: profile.email,
       });
       navigation.reset({ index: 0, routes: [{ name: "Home" }] });
     } catch (e) {
       setError(
         e instanceof ApiError
-          ? "Sign in failed. Please try again."
+          ? e.message
           : e instanceof Error
             ? e.message
             : "Something went wrong."
@@ -76,7 +87,20 @@ export default function SignInScreen() {
 
       <AppButton label="Sign In" onPress={handleSignIn} loading={loading} style={{ marginBottom: spacing.md }} />
 
-      <Body style={[styles.centerText, styles.link]}>Forgot Password</Body>
+      <Pressable onPress={() => navigation.navigate("SignUp")}>
+        <Body style={[styles.centerText, styles.link]}>New patient? Create an account</Body>
+      </Pressable>
+
+      <Pressable
+        onPress={() =>
+          Alert.alert(
+            "Coming soon",
+            "Password reset isn't available in this prototype yet. Contact your care team if you're locked out."
+          )
+        }
+      >
+        <Body style={[styles.centerText, styles.link]}>Forgot Password</Body>
+      </Pressable>
 
       <View style={styles.validationBox}>
         <Caption style={error ? styles.errorText : undefined}>

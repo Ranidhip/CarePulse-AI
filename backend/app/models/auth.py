@@ -10,6 +10,14 @@ class SignInRequest(BaseModel):
     password: str = Field(..., min_length=1)
 
 
+class PatientSignUpRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=8, max_length=200)
+    full_name: str = Field(..., min_length=1, max_length=200)
+    age: int | None = Field(default=None, ge=0, le=130)
+    contact_number: str | None = Field(default=None, max_length=30)
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str = Field(..., min_length=1)
 

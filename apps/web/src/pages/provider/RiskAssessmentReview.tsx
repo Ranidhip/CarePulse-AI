@@ -1,15 +1,23 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
 import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
+import TextField from "@mui/material/TextField";
 import CircularProgress from "@mui/material/CircularProgress";
 import RiskBadge from "../../components/RiskBadge";
-import { api } from "../../lib/providerApi";
+import { api, ApiError } from "../../lib/providerApi";
+import { overrideReasonSchema, validateOrError } from "../../lib/validation";
 import type { PatientDetail } from "../../types";
 import { REASON_CODE_LABELS, SUPPLY_LABELS } from "../../types";
+
+const OVERRIDE_LEVELS: { value: "low" | "medium" | "high"; label: string }[] = [
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+];
 
 export default function RiskAssessmentReview() {
   const { patientId } = useParams<{ patientId: string }>();
@@ -17,8 +25,19 @@ export default function RiskAssessmentReview() {
   const [data, setData] = useState<PatientDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [acknowledging, setAcknowledging] = useState(false);
+  const [dismissing, setDismissing] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [reportFormOpen, setReportFormOpen] = useState(false);
+  const [reportNote, setReportNote] = useState("");
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
+  const [overrideFormOpen, setOverrideFormOpen] = useState(false);
+  const [overrideLevel, setOverrideLevel] = useState<"low" | "medium" | "high">("medium");
+  const [overrideReason, setOverrideReason] = useState("");
+  const [overrideError, setOverrideError] = useState<string | null>(null);
+  const [submittingOverride, setSubmittingOverride] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     if (!patientId) return;
     let cancelled = false;
     api
@@ -30,6 +49,77 @@ export default function RiskAssessmentReview() {
       cancelled = true;
     };
   }, [patientId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function handleMarkInProgress() {
+    const alertId = data?.openAlerts[0]?.id;
+    if (!alertId) return;
+    setActionError(null);
+    setAcknowledging(true);
+    try {
+      await api.acknowledgeAlert(alertId);
+      load();
+    } catch (e) {
+      setActionError(e instanceof ApiError ? e.message : "Could not update this alert.");
+    } finally {
+      setAcknowledging(false);
+    }
+  }
+
+  async function handleDismissAsNotUrgent() {
+    const alertId = data?.openAlerts[0]?.id;
+    if (!alertId) return;
+    setActionError(null);
+    setDismissing(true);
+    try {
+      await api.dismissAlertAsNotUrgent(alertId);
+      load();
+    } catch (e) {
+      setActionError(e instanceof ApiError ? e.message : "Could not dismiss this alert.");
+    } finally {
+      setDismissing(false);
+    }
+  }
+
+  async function handleFeedback(feedback: "helpful" | "not_helpful" | "reported", note: string | null) {
+    if (!data?.assessmentId) return;
+    setActionError(null);
+    setSubmittingFeedback(true);
+    try {
+      await api.submitRiskAssessmentFeedback(data.assessmentId, feedback, note);
+      setReportFormOpen(false);
+      setReportNote("");
+      load();
+    } catch (e) {
+      setActionError(e instanceof ApiError ? e.message : "Could not submit feedback.");
+    } finally {
+      setSubmittingFeedback(false);
+    }
+  }
+
+  async function handleOverride() {
+    if (!data?.assessmentId) return;
+    const validation = validateOrError(overrideReasonSchema, overrideReason);
+    if (!validation.ok) {
+      setOverrideError(validation.error);
+      return;
+    }
+    setOverrideError(null);
+    setSubmittingOverride(true);
+    try {
+      await api.submitRiskAssessmentOverride(data.assessmentId, overrideLevel, validation.data);
+      setOverrideFormOpen(false);
+      setOverrideReason("");
+      load();
+    } catch (e) {
+      setOverrideError(e instanceof ApiError ? e.message : "Could not save this override.");
+    } finally {
+      setSubmittingOverride(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -46,19 +136,60 @@ export default function RiskAssessmentReview() {
     );
   }
 
-  const { patient, latestCheckIn, riskLevel } = data;
+  const {
+    patient,
+    latestCheckIn,
+    riskLevel,
+    ruleResultLevel,
+    aiSuggestedLevel,
+    aiConfidence,
+    openAlerts,
+    feedback,
+    providerOverrideLevel,
+    providerOverrideReason,
+  } = data;
+  const hasOpenAlert = openAlerts.length > 0;
+  const alertIsNew = openAlerts[0]?.status === "open";
 
   return (
     <Box sx={{ p: 4, maxWidth: 1100 }}>
-      <Typography variant="h1" gutterBottom>
-        Risk Assessment Review
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        {patient.name} · Patient ID: {patient.id} · Provider review required
-      </Typography>
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 2 }}>
+        <Box>
+          <Typography variant="h1" gutterBottom>
+            Risk Assessment Review
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+            {patient.name} · Patient ID: {patient.id} · Provider review required
+          </Typography>
+        </Box>
+        {hasOpenAlert && (
+          <Box sx={{ display: "flex", gap: 1 }}>
+            <Button
+              variant="outlined"
+              color="secondary"
+              disabled={dismissing || acknowledging}
+              onClick={handleDismissAsNotUrgent}
+            >
+              Dismiss as not urgent
+            </Button>
+            <Button
+              variant="contained"
+              disabled={!alertIsNew || acknowledging || dismissing}
+              onClick={handleMarkInProgress}
+            >
+              {alertIsNew ? "Mark In Progress" : "In Progress"}
+            </Button>
+          </Box>
+        )}
+      </Box>
+      {actionError && (
+        <Typography color="error" variant="body2" sx={{ mb: 2 }}>
+          {actionError}
+        </Typography>
+      )}
 
       <Paper variant="outlined" sx={{ p: 3, mb: 3 }}>
-        <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 3 }}>
+        <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 3 }}>
           <Box>
             <Typography variant="caption" color="text.secondary">
               Final risk indicator
@@ -71,17 +202,108 @@ export default function RiskAssessmentReview() {
             <Typography variant="caption" color="text.secondary">
               Rule-based result
             </Typography>
-            <Typography variant="h3">{riskLevel.toUpperCase()}</Typography>
+            <Typography variant="h3">{ruleResultLevel ? ruleResultLevel.toUpperCase() : "—"}</Typography>
+          </Box>
+          <Box>
+            <Typography variant="caption" color="text.secondary">
+              AI-suggested result
+            </Typography>
+            <Typography variant="h3">
+              {aiSuggestedLevel ? aiSuggestedLevel.toUpperCase() : "—"}
+              {aiConfidence != null && (
+                <Typography component="span" variant="body2" color="text.secondary">
+                  {" "}
+                  · {Math.round(aiConfidence * 100)}% confidence
+                </Typography>
+              )}
+            </Typography>
           </Box>
           <Box>
             <Typography variant="caption" color="text.secondary">
               Manual review status
             </Typography>
-            <Typography variant="body2" sx={{ fontWeight: 600, mt: 0.5 }}>
-              Provider decision pending
-            </Typography>
+            {providerOverrideLevel ? (
+              <Typography variant="body2" sx={{ fontWeight: 600, mt: 0.5 }}>
+                Overridden to {providerOverrideLevel.toUpperCase()} by provider
+              </Typography>
+            ) : (
+              <Typography variant="body2" sx={{ fontWeight: 600, mt: 0.5 }}>
+                Provider decision pending
+              </Typography>
+            )}
           </Box>
         </Box>
+
+        {providerOverrideLevel ? (
+          <Box sx={{ mt: 2, pt: 2, borderTop: "1px solid #EEE" }}>
+            <Typography variant="body2" color="text.secondary">
+              <b>Override reason:</b> {providerOverrideReason}
+            </Typography>
+          </Box>
+        ) : (
+          <Box sx={{ mt: 2, pt: 2, borderTop: "1px solid #EEE" }}>
+            {overrideFormOpen ? (
+              <Box>
+                <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>
+                  Override risk level
+                </Typography>
+                <Box sx={{ display: "flex", gap: 1, mb: 1 }}>
+                  {OVERRIDE_LEVELS.map((opt) => (
+                    <Button
+                      key={opt.value}
+                      size="small"
+                      variant={overrideLevel === opt.value ? "contained" : "outlined"}
+                      color="secondary"
+                      onClick={() => setOverrideLevel(opt.value)}
+                    >
+                      {opt.label}
+                    </Button>
+                  ))}
+                </Box>
+                <TextField
+                  fullWidth
+                  size="small"
+                  multiline
+                  minRows={2}
+                  placeholder="Why are you overriding the system's risk level? (required)"
+                  value={overrideReason}
+                  onChange={(e) => setOverrideReason(e.target.value)}
+                  sx={{ mb: 1 }}
+                />
+                {overrideError && (
+                  <Typography variant="caption" color="error" sx={{ display: "block", mb: 1 }}>
+                    {overrideError}
+                  </Typography>
+                )}
+                <Box sx={{ display: "flex", gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    onClick={handleOverride}
+                    disabled={submittingOverride}
+                  >
+                    Save Override
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="secondary"
+                    onClick={() => {
+                      setOverrideFormOpen(false);
+                      setOverrideError(null);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </Box>
+              </Box>
+            ) : (
+              <Button size="small" variant="outlined" onClick={() => setOverrideFormOpen(true)}>
+                Override Risk Level
+              </Button>
+            )}
+          </Box>
+        )}
       </Paper>
 
       {!latestCheckIn ? (
@@ -124,10 +346,75 @@ export default function RiskAssessmentReview() {
 
           <Paper variant="outlined" sx={{ p: 3 }}>
             <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1 }}>
-              <Typography variant="h3">Prototype-generated summary</Typography>
-              <Chip label="Provider review required" size="small" />
+              <Typography variant="h3">AI-generated summary</Typography>
+              <Chip label="Requires provider verification" size="small" />
             </Box>
-            <Typography variant="body2">{latestCheckIn.summary}</Typography>
+            <Typography variant="body2" sx={{ mb: 2 }}>
+              {latestCheckIn.summary}
+            </Typography>
+
+            {feedback ? (
+              <Typography variant="caption" color="text.secondary">
+                {feedback === "helpful" && "You marked this summary Helpful."}
+                {feedback === "not_helpful" && "You marked this summary Not helpful."}
+                {feedback === "reported" && "You reported an issue with this summary."}
+              </Typography>
+            ) : reportFormOpen ? (
+              <Box>
+                <TextField
+                  fullWidth
+                  size="small"
+                  multiline
+                  minRows={2}
+                  placeholder="What's wrong with this summary? (optional)"
+                  value={reportNote}
+                  onChange={(e) => setReportNote(e.target.value)}
+                  sx={{ mb: 1 }}
+                />
+                <Box sx={{ display: "flex", gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    color="error"
+                    onClick={() => handleFeedback("reported", reportNote.trim() || null)}
+                    disabled={submittingFeedback}
+                  >
+                    Submit Report
+                  </Button>
+                  <Button size="small" variant="outlined" color="secondary" onClick={() => setReportFormOpen(false)}>
+                    Cancel
+                  </Button>
+                </Box>
+              </Box>
+            ) : (
+              <Box sx={{ display: "flex", gap: 1 }}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => handleFeedback("helpful", null)}
+                  disabled={submittingFeedback}
+                >
+                  Helpful
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => handleFeedback("not_helpful", null)}
+                  disabled={submittingFeedback}
+                >
+                  Not helpful
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  onClick={() => setReportFormOpen(true)}
+                  disabled={submittingFeedback}
+                >
+                  Report an issue
+                </Button>
+              </Box>
+            )}
           </Paper>
 
           <Paper variant="outlined" sx={{ p: 3, gridColumn: "1 / -1" }}>
@@ -157,9 +444,14 @@ export default function RiskAssessmentReview() {
           The healthcare provider makes the final decision. CarePulse AI does not
           diagnose or recommend medication changes.
         </Typography>
-        <Button variant="contained" onClick={() => navigate(`/provider/patients/${patient.id}/follow-up`)}>
-          Record Follow-up
-        </Button>
+        <Box sx={{ display: "flex", gap: 1.5 }}>
+          <Button variant="outlined" color="secondary" onClick={() => navigate(`/provider/patients/${patient.id}`)}>
+            Skip Assessment Summary
+          </Button>
+          <Button variant="contained" onClick={() => navigate(`/provider/patients/${patient.id}/follow-up`)}>
+            Record Follow-up
+          </Button>
+        </Box>
       </Paper>
     </Box>
   );

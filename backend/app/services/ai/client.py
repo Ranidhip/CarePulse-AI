@@ -18,9 +18,22 @@ degrades to the same AI-failure fallback as any other AI error, never a
 500. Tests do not need to call this function at all — they pass a fake
 client object directly into run_ai_analysis() (see app/services/ai/
 analysis.py and app/tests/test_ai_analysis.py).
+
+get_async_openai_client() is the async counterpart, added for the Phase 4
+agent workflow (app/services/agents/*). The openai-agents SDK's default
+model provider builds its own AsyncOpenAI client that reads
+OPENAI_API_KEY from the OS environment when an Agent's `model` is given
+as a plain string (which is exactly what
+app.services.agents.client.get_agent_model() returns) — this app never
+exports backend/.env into os.environ (pydantic-settings parses .env into
+Settings only), so that default silently fails with "Missing
+credentials" on every real check-in. app/main.py calls
+agents.set_default_openai_client(get_async_openai_client()) once at
+startup so the SDK uses our explicitly-keyed client instead of relying on
+that env-var lookup.
 """
 
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 
 from app.core.config import get_settings
 
@@ -29,6 +42,14 @@ settings = get_settings()
 
 def get_openai_client() -> OpenAI:
     return OpenAI(
+        api_key=settings.openai_api_key,
+        timeout=settings.ai_timeout_seconds,
+        max_retries=settings.ai_max_retries,
+    )
+
+
+def get_async_openai_client() -> AsyncOpenAI:
+    return AsyncOpenAI(
         api_key=settings.openai_api_key,
         timeout=settings.ai_timeout_seconds,
         max_retries=settings.ai_max_retries,
