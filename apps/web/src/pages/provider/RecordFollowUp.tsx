@@ -306,12 +306,17 @@ export default function RecordFollowUp() {
         </Box>
       </Paper>
 
-      <Box sx={{ display: "flex", gap: 1.5, justifyContent: "flex-end" }}>
-        <Button variant="outlined" color="secondary" onClick={() => navigate(-1)}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, justifyContent: "flex-end" }}>
+        {saving && (
+          <Typography variant="caption" color="text.secondary">
+            This can take up to a minute if the server was asleep.
+          </Typography>
+        )}
+        <Button variant="outlined" color="secondary" onClick={() => navigate(-1)} disabled={saving}>
           Cancel
         </Button>
         <Button variant="contained" onClick={handleSave} disabled={saving}>
-          Save Follow-up
+          {saving ? "Saving…" : "Save Follow-up"}
         </Button>
       </Box>
     </Box>

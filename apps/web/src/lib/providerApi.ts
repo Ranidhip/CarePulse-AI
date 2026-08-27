@@ -87,10 +87,12 @@ function sleep(ms: number): Promise<void> {
 // instance down after inactivity — the first request after a gap can
 // fail as a plain network error (TypeError: Failed to fetch) while the
 // instance is still waking up, indistinguishable client-side from the
-// server actually being down. A couple of short retries covers that
-// window without leaving the caller stuck for long; a real outage still
-// surfaces as an error after they're exhausted.
-const NETWORK_RETRY_DELAYS_MS = [2000, 5000];
+// server actually being down. Render documents up to ~50s for a free
+// instance to boot, so these delays are sized to cover that window
+// (7 attempts spanning ~51s) rather than give up after a few seconds
+// into what's often still a normal cold start; a real outage still
+// surfaces as an error once they're exhausted.
+const NETWORK_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 20000];
 
 async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
