@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import ProviderSignIn from "./pages/provider/ProviderSignIn";
+import ResetPassword from "./pages/provider/ResetPassword";
 import ProviderLayout from "./pages/provider/ProviderLayout";
 import Dashboard from "./pages/provider/Dashboard";
 import Alerts from "./pages/provider/Alerts";
@@ -17,6 +18,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Navigate to="/provider" replace />} />
       <Route path="/provider/sign-in" element={<ProviderSignIn />} />
+      <Route path="/provider/reset-password" element={<ResetPassword />} />
 
       <Route element={<RequireProviderSession />}>
         <Route path="/provider" element={<ProviderLayout />}>

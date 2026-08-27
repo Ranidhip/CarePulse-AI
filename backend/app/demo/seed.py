@@ -91,6 +91,9 @@ def _insert_checkin(
             missed_dose_count=missed_dose_count,
             supply_remaining=supply_remaining,
             difficulty_reported=difficulty_reported,
+            # Same demo-only scope note as app/api/demo_patient.py: this
+            # seed data has no side-effects concept of its own.
+            side_effects_reported=False,
             systolic=systolic,
             diastolic=diastolic,
         )

@@ -13,7 +13,7 @@ vi.mock("../../lib/providerApi", () => ({
       this.status = status;
     }
   },
-  api: { signIn: vi.fn() },
+  api: { signIn: vi.fn(), requestPasswordReset: vi.fn() },
 }));
 
 const mockedApi = vi.mocked(api);
@@ -41,5 +41,40 @@ describe("ProviderSignIn", () => {
       </MemoryRouter>,
     );
     expect(screen.getByText("Your session has expired. Please sign in again.")).toBeInTheDocument();
+  });
+
+  it("sends a reset link and shows the generic confirmation message", async () => {
+    const user = userEvent.setup();
+    mockedApi.requestPasswordReset.mockResolvedValueOnce(undefined);
+    render(
+      <MemoryRouter>
+        <ProviderSignIn />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Forgot Password?" }));
+    expect(screen.getByText("Reset your password")).toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText("anjali.silva@clinic.lk"), "anjali@clinic.lk");
+    await user.click(screen.getByRole("button", { name: "Send Reset Link" }));
+
+    expect(mockedApi.requestPasswordReset).toHaveBeenCalledWith("anjali@clinic.lk");
+    expect(
+      await screen.findByText(/a password reset link has been sent/i),
+    ).toBeInTheDocument();
+  });
+
+  it("returns to the sign-in form from forgot-password mode", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <ProviderSignIn />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Forgot Password?" }));
+    await user.click(screen.getByRole("button", { name: "Back to sign in" }));
+
+    expect(screen.getByText("Welcome back")).toBeInTheDocument();
   });
 });

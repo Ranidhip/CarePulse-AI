@@ -155,6 +155,48 @@ def _get_assessment_with_patient_or_404(supabase: Client, assessment_id: str) ->
     return assessment, check_in["patient_id"]
 
 
+def _provider_names_by_id(supabase: Client, provider_ids: list[str]) -> dict[str, str]:
+    """
+    Resolves a batch of provider_profiles.id -> full_name in one query.
+
+    Used to attach provider_full_name / assigned_to_provider_name onto
+    follow_up_actions rows and the patient's assigned-provider name,
+    without relying on postgrest's embedded-resource select syntax (kept
+    consistent with the rest of this file's "separate query, join in
+    Python" pattern — see _reasons_for_assessment, list_colleagues).
+    """
+    ids = [pid for pid in set(provider_ids) if pid]
+    if not ids:
+        return {}
+    result = (
+        supabase.table("provider_profiles")
+        .select("id, full_name")
+        .in_("id", ids)
+        .execute()
+    )
+    return {row["id"]: row["full_name"] for row in result.data if row.get("full_name")}
+
+
+def _attach_provider_names(supabase: Client, follow_up_rows: list[dict]) -> list[dict]:
+    """
+    Returns copies of follow_up_actions rows with provider_full_name and
+    assigned_to_provider_name filled in, for FollowUpActionOut. Mutates
+    copies, not the originals — callers may reuse the same rows elsewhere
+    (e.g. patient_timeline() also builds TimelineEntryOut.data from them).
+    """
+    ids = [row.get("provider_id") for row in follow_up_rows] + [
+        row.get("assigned_to_provider_id") for row in follow_up_rows
+    ]
+    names = _provider_names_by_id(supabase, ids)
+    enriched = []
+    for row in follow_up_rows:
+        row = {**row}
+        row["provider_full_name"] = names.get(row.get("provider_id"))
+        row["assigned_to_provider_name"] = names.get(row.get("assigned_to_provider_id"))
+        enriched.append(row)
+    return enriched
+
+
 def _earliest_unresolved_alert(supabase: Client, patient_id: str) -> dict | None:
     result = (
         supabase.table("alerts")
@@ -297,7 +339,16 @@ def priority_queue(
                 .eq("risk_assessment_id", assessment_row["id"])
                 .execute()
             )
-            reasons = [r["reason_code"] for r in reasons_result.data]
+            # The same reason_code can appear twice in risk_reasons — once
+            # from the rule engine (source="rule"), once from the AI
+            # adapter reaching the same conclusion (source="ai"). Real,
+            # not a bug in this query: keeping both rows preserves that
+            # provenance for anyone who needs it later. This list is only
+            # ever surfaced as a flat label string (QueueRowOut.reason_codes
+            # -> the dashboard's "Main features" column), which has no use
+            # for showing "Multiple missed doses" twice — dict.fromkeys
+            # dedupes while preserving first-seen order.
+            reasons = list(dict.fromkeys(r["reason_code"] for r in reasons_result.data))
 
         row_model = QueueRowOut(
             patient_id=patient_row["id"],
@@ -416,13 +467,31 @@ def patient_detail(
         .execute()
     )
 
+    active_assignment = one_or_none(
+        supabase.table("patient_provider_assignments")
+        .select("provider_id")
+        .eq("patient_id", patient_id)
+        .eq("is_active", True)
+        .order("assigned_at", desc=True)
+    )
+    assigned_provider_name = (
+        _provider_names_by_id(supabase, [active_assignment["provider_id"]]).get(
+            active_assignment["provider_id"]
+        )
+        if active_assignment
+        else None
+    )
+
     return PatientDetailOut(
         profile=PatientSummaryOut(**patient_row),
         medications=[MedicationOut(**m) for m in medications_result.data],
         latest_bp=latest_bp,
         latest_check_in=latest_check_in,
         open_alerts=[AlertOut(**a) for a in alerts_result.data],
-        follow_ups=[FollowUpActionOut(**f) for f in follow_ups_result.data],
+        follow_ups=[
+            FollowUpActionOut(**f) for f in _attach_provider_names(supabase, follow_ups_result.data)
+        ],
+        assigned_provider_name=assigned_provider_name,
     )
 
 
@@ -550,7 +619,7 @@ def patient_timeline(
         .order("created_at", desc=True)
         .execute()
     )
-    for row in follow_ups_result.data:
+    for row in _attach_provider_names(supabase, follow_ups_result.data):
         entries.append(
             TimelineEntryOut(
                 entry_type="follow_up",
@@ -603,7 +672,7 @@ def list_follow_ups(
         .order("created_at", desc=True)
         .execute()
     )
-    return [FollowUpActionOut(**f) for f in result.data]
+    return [FollowUpActionOut(**f) for f in _attach_provider_names(supabase, result.data)]
 
 
 @router.post(
@@ -635,8 +704,17 @@ def create_follow_up(
                 "provider_id": assignment.provider_profile_id,
                 "action_type": body.action_type,
                 "note_text": body.note_text,
+                "next_advice": body.next_advice,
                 "outcome": body.outcome,
                 "status": body.status,
+                "contacted_person": body.contacted_person,
+                "follow_up_date": body.follow_up_date.isoformat() if body.follow_up_date else None,
+                "follow_up_time": body.follow_up_time.isoformat() if body.follow_up_time else None,
+                "assigned_to_provider_id": body.assigned_to_provider_id,
+                "notify_patient": body.notify_patient,
+                "next_action_date": (
+                    body.next_action_date.isoformat() if body.next_action_date else None
+                ),
             }
         )
         .execute()
@@ -650,7 +728,7 @@ def create_follow_up(
             supabase, body.alert_id, body.alert_status, assignment.provider_profile_id
         )
 
-    return FollowUpActionOut(**result.data[0])
+    return FollowUpActionOut(**_attach_provider_names(supabase, result.data)[0])
 
 
 # --- Alerts ----------------------------------------------------------------

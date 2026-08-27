@@ -27,6 +27,12 @@ class Settings(BaseSettings):
         "http://localhost:8081",   # Expo web dev default (SDK 49+, incl. this project's SDK 54)
     ]
 
+    # Base URL of the deployed provider web app — used only to build the
+    # redirect_to link Supabase Auth's password-recovery email points
+    # back at (POST /auth/forgot-password). Never used for anything else;
+    # this backend never redirects a request here itself.
+    web_app_url: str = "http://localhost:5173"
+
     # Supabase — service-role key bypasses RLS and is used for all backend
     # reads/writes (see core/security.py). The anon key is used only for
     # the /auth/sign-in and /auth/refresh endpoints, which authenticate a

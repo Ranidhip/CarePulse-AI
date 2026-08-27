@@ -49,6 +49,8 @@ interface QueuedCheckIn {
     supply_bucket: SupplyBucket;
     difficulty_reported: boolean;
     difficulty_text: string | null;
+    side_effects_reported: boolean;
+    side_effects_text: string | null;
     patient_submitted_at: string;
   };
 }

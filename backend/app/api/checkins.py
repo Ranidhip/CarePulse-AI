@@ -115,6 +115,8 @@ async def submit_check_in(
                 "supply_remaining": payload.supply_remaining,
                 "difficulty_reported": payload.difficulty_reported,
                 "difficulty_text": payload.difficulty_text,
+                "side_effects_reported": payload.side_effects_reported,
+                "side_effects_text": payload.side_effects_text,
                 "requests_contact": payload.requests_contact,
                 "patient_submitted_at": payload.patient_submitted_at.isoformat(),
                 "server_received_at": datetime.now(timezone.utc).isoformat(),
@@ -145,6 +147,7 @@ async def submit_check_in(
             missed_dose_count=payload.missed_dose_count,
             supply_remaining=payload.supply_remaining,
             difficulty_reported=payload.difficulty_reported,
+            side_effects_reported=payload.side_effects_reported,
             systolic=payload.systolic,
             diastolic=payload.diastolic,
         )

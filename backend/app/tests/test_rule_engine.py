@@ -15,6 +15,7 @@ def base_input(**overrides) -> RuleInput:
         missed_dose_count=0,
         supply_remaining=True,
         difficulty_reported=False,
+        side_effects_reported=False,
         systolic=118,
         diastolic=76,
     )
@@ -60,6 +61,23 @@ def test_low_supply_is_medium():
 def test_difficulty_reported_is_medium():
     result = evaluate(base_input(difficulty_reported=True))
     assert result.risk_level == "medium"
+    assert "SCHEDULE_DIFFICULTY" in result.reason_codes
+
+
+def test_side_effects_reported_is_medium():
+    result = evaluate(base_input(side_effects_reported=True))
+    assert result.risk_level == "medium"
+    assert "SIDE_EFFECTS" in result.reason_codes
+
+
+def test_side_effects_and_difficulty_both_reported_gives_both_reason_codes():
+    # Regression guard for the exact bug this field fixes: before
+    # side_effects_reported existed, the mobile app OR'd it into
+    # difficulty_reported, so a patient reporting both concepts could
+    # only ever produce one reason code (SCHEDULE_DIFFICULTY), never both.
+    result = evaluate(base_input(side_effects_reported=True, difficulty_reported=True))
+    assert result.risk_level == "medium"
+    assert "SIDE_EFFECTS" in result.reason_codes
     assert "SCHEDULE_DIFFICULTY" in result.reason_codes
 
 

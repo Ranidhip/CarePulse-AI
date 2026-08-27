@@ -14,13 +14,17 @@ Two kinds of rows, both fictional/synthetic (no real patient data):
    run_eval.py's rule-engine pass will catch the drift.
 
 2. "narrative" — hand-written realistic patient free-text scenarios
-   covering all 8 reason codes, including the 3 the rule engine can never
-   produce on its own (SIDE_EFFECTS, REPEATED_NONRESPONSE, OTHER) since
-   those only come from the AI reading difficulty_text. Ground truth here
-   is a human clinical judgment call (what a reasonable reviewer would
-   label), not something derivable from the rule engine — this half is
-   what an AI-pipeline evaluation run (see eval/README.md) would actually
-   score against.
+   covering all 8 reason codes, including 2 the rule engine can never
+   produce on its own (REPEATED_NONRESPONSE, OTHER) since those only come
+   from the AI reading difficulty_text. (SIDE_EFFECTS moved out of that
+   group once side_effects_reported became its own structured rule-engine
+   input — see engine.py and _structured_row's side_effects_reported
+   parameter above; the rule engine now produces it directly whenever
+   that field is true, the same way SCHEDULE_DIFFICULTY already works.)
+   Ground truth here is a human clinical judgment call (what a reasonable
+   reviewer would label), not something derivable from the rule engine —
+   this half is what an AI-pipeline evaluation run (see eval/README.md)
+   would actually score against.
 
 Run from backend/, with the venv active:
     python eval/generate_dataset.py
@@ -47,6 +51,13 @@ def _structured_row(
     systolic: int | None,
     diastolic: int | None,
     note: str,
+    # Defaulted rather than swept like the other boundaries: this dataset
+    # predates side_effects_reported existing as its own rule-engine
+    # input (see engine.py) and this script's own boundary sweeps are
+    # scoped to the pre-existing thresholds. Kept as a real parameter
+    # (not silently hardcoded) so a future sweep can be added here without
+    # having to rediscover that this dataset never covered it.
+    side_effects_reported: bool = False,
 ) -> dict:
     result = evaluate(
         RuleInput(
@@ -54,6 +65,7 @@ def _structured_row(
             missed_dose_count=missed_dose_count,
             supply_remaining=supply_remaining,
             difficulty_reported=difficulty_reported,
+            side_effects_reported=side_effects_reported,
             systolic=systolic,
             diastolic=diastolic,
         )
@@ -65,6 +77,7 @@ def _structured_row(
         "missed_dose_count": missed_dose_count,
         "supply_remaining": supply_remaining,
         "difficulty_reported": difficulty_reported,
+        "side_effects_reported": side_effects_reported,
         "difficulty_text": None,
         "systolic": systolic,
         "diastolic": diastolic,

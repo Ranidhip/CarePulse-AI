@@ -17,6 +17,8 @@ class CheckInCreateRequest(BaseModel):
     diastolic: int | None = Field(default=None, ge=20, le=200)
     difficulty_reported: bool = False
     difficulty_text: str | None = Field(default=None, max_length=500)
+    side_effects_reported: bool = False
+    side_effects_text: str | None = Field(default=None, max_length=500)
     requests_contact: bool = False
     patient_submitted_at: datetime
 
@@ -59,6 +61,14 @@ class CheckInRecord(BaseModel):
     supply_remaining: bool
     difficulty_reported: bool
     difficulty_text: str | None
+    # Defaulted (not required): every route builds this model via
+    # CheckInRecord(**row) from a raw weekly_check_ins row. A row selected
+    # before supabase/migrations/20260827120000_check_in_side_effects.sql
+    # is applied simply has no such key in the dict, so **row omits the
+    # keyword entirely and these defaults are used — no KeyError, no
+    # explicit .get() needed at each call site.
+    side_effects_reported: bool = False
+    side_effects_text: str | None = None
     requests_contact: bool
     patient_submitted_at: datetime
     server_received_at: datetime

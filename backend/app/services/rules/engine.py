@@ -28,6 +28,7 @@ class RuleInput:
     missed_dose_count: int | None
     supply_remaining: bool
     difficulty_reported: bool
+    side_effects_reported: bool
     systolic: int | None
     diastolic: int | None
 
@@ -87,6 +88,10 @@ def evaluate(rule_input: RuleInput) -> RuleResult:
     if rule_input.difficulty_reported:
         is_medium = True
         add_reason("SCHEDULE_DIFFICULTY")
+
+    if rule_input.side_effects_reported:
+        is_medium = True
+        add_reason("SIDE_EFFECTS")
 
     if is_medium:
         return RuleResult(risk_level="medium", reason_codes=reason_codes, rule_version=RULE_VERSION)

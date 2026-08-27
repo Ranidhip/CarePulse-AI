@@ -45,6 +45,9 @@ export interface ApiPatient {
   name: string;
   email: string;
   age: number;
+  condition: string | null;
+  clinic: string | null;
+  enrolledAt: string | null;
 }
 
 export interface ApiMedication {
@@ -78,6 +81,8 @@ export interface ApiCheckIn {
   diastolic: number | null;
   difficulty_reported: number;
   difficulty_text: string | null;
+  side_effects_reported: number;
+  side_effects_text: string | null;
   patient_submitted_at: string;
   risk_level: "low" | "medium" | "high";
   reason_codes: ReasonCode[];
@@ -85,7 +90,14 @@ export interface ApiCheckIn {
   summary: string;
 }
 
-export const CONTACT_METHODS = ["Phone", "Message", "Clinic Visit", "Unable to Reach", "Other"] as const;
+export const CONTACT_METHODS = [
+  "Phone",
+  "Message",
+  "Clinic Visit",
+  "Caregiver Contact",
+  "Unable to Reach",
+  "Other",
+] as const;
 export type ContactMethod = (typeof CONTACT_METHODS)[number];
 
 // Matches backend/app/models/provider.py's FollowUpOutcome enum exactly —
@@ -112,10 +124,17 @@ export interface ApiFollowUp {
   id: string;
   patient_id: string;
   provider_id: string;
+  provider_full_name: string | null;
   contact_method: ContactMethod;
   notes: string | null;
   next_advice: string | null;
   alert_status: AlertStatus;
+  contacted_person: string | null;
+  follow_up_date: string | null;
+  follow_up_time: string | null;
+  assigned_to_provider_id: string | null;
+  assigned_to_provider_name: string | null;
+  notify_patient: boolean;
   next_action_date: string | null;
   created_at: string;
 }
@@ -168,6 +187,10 @@ export interface PatientDetail {
   aiConfidence: number | null;
   /** id of the latest risk_assessments row — needed to submit feedback on it. */
   assessmentId: string | null;
+  /** When the latest risk assessment was generated (rule/AI run time), for the Risk Assessment Review screen's "Model information" block. */
+  assessmentCreatedAt: string | null;
+  /** Which AI model produced ai_suggested_level, if any — null when the assessment is rule-only. */
+  modelVersion: string | null;
   feedback: "helpful" | "not_helpful" | "reported" | null;
   /** Set once a provider has overridden the level shown above, with a required reason. */
   providerOverrideLevel: "low" | "medium" | "high" | null;
@@ -175,6 +198,8 @@ export interface PatientDetail {
   providerOverrideReason: string | null;
   followUps: ApiFollowUp[];
   openAlerts: ApiOpenAlert[];
+  /** The provider currently assigned to this patient — Patient Record's header. */
+  assignedProviderName: string | null;
 }
 
 export interface ProviderProfile {

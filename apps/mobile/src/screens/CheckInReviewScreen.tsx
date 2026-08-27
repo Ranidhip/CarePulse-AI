@@ -53,13 +53,26 @@ export default function CheckInReviewScreen() {
     setSubmitting(true);
     setError(null);
     const submittedAt = new Date().toISOString();
+    // Side effects and treatment difficulty are two distinct questions in
+    // the UI (this screen's own "Side Effects" and "Difficulties" cards
+    // above) and now have their own distinct backend fields — previously
+    // sideEffectsReported was OR'd into difficulty_reported here, so a
+    // patient reporting side effects with no scheduling difficulty was
+    // recorded (and shown to the provider) as SCHEDULE_DIFFICULTY, never
+    // as SIDE_EFFECTS. There is still only one free-text box on this
+    // draft (additionalDetails), so it's attached to whichever concept(s)
+    // are actually true — both, if the patient reported both.
+    const hasDifficulty = draft.difficultyReasons.length > 0;
+    const hasSideEffects = draft.sideEffectsReported === true;
     const payload = {
       missed_doses: draft.missedDoses === true,
       missed_dose_count: draft.missedDoseCount,
       medication_stopped: draft.medicationStopped === true,
       supply_bucket: draft.supplyBucket,
-      difficulty_reported: draft.sideEffectsReported === true || draft.difficultyReasons.length > 0,
-      difficulty_text: draft.additionalDetails || null,
+      difficulty_reported: hasDifficulty,
+      difficulty_text: hasDifficulty ? draft.additionalDetails || null : null,
+      side_effects_reported: hasSideEffects,
+      side_effects_text: hasSideEffects ? draft.additionalDetails || null : null,
       patient_submitted_at: submittedAt,
     };
     try {

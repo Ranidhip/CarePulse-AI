@@ -8,7 +8,7 @@ only safe audit metadata: never prompts, model payloads, tool inputs,
 tool outputs, or internal exception details.
 """
 
-from datetime import datetime
+from datetime import date, datetime, time
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -163,10 +163,30 @@ class FollowUpActionOut(BaseModel):
     id: str
     alert_id: str
     provider_id: str
+    # The recording provider's own display name — resolved server-side via
+    # a provider_profiles lookup (see _attach_provider_names in
+    # app/api/provider.py) so the Follow-up History screen can show who
+    # took each action without the frontend having to resolve UUIDs
+    # itself. None only if the provider row has since been deleted.
+    provider_full_name: str | None = None
     action_type: FollowUpActionType
     note_text: str | None
+    # Split out from note_text so the Record Follow-up form's "Notes" and
+    # "Next advice" fields round-trip as two distinct values instead of
+    # being concatenated into one column (see the migration's docstring:
+    # supabase/migrations/20260827111500_follow_up_action_fields.sql).
+    next_advice: str | None = None
     outcome: FollowUpOutcome | None
     status: FollowUpStatus
+    contacted_person: str | None = None
+    follow_up_date: date | None = None
+    follow_up_time: time | None = None
+    assigned_to_provider_id: str | None = None
+    # Resolved the same way as provider_full_name above, for whoever the
+    # next action is assigned to (may differ from the recording provider).
+    assigned_to_provider_name: str | None = None
+    notify_patient: bool = False
+    next_action_date: date | None = None
     created_at: datetime
 
 
@@ -174,6 +194,7 @@ class FollowUpActionCreateRequest(BaseModel):
     alert_id: str = Field(..., min_length=1)
     action_type: FollowUpActionType
     note_text: str | None = Field(default=None, max_length=1000)
+    next_advice: str | None = Field(default=None, max_length=1000)
     outcome: FollowUpOutcome | None = None
     status: FollowUpStatus = "needs_review"
     # Optional: when set, the alert itself (alerts.status) is updated to
@@ -183,6 +204,12 @@ class FollowUpActionCreateRequest(BaseModel):
     # touches the alert. Without this field, "resolving" an alert here
     # was a no-op that left it open forever (see PATCH /provider/alerts).
     alert_status: AlertStatus | None = None
+    contacted_person: str | None = Field(default=None, max_length=200)
+    follow_up_date: date | None = None
+    follow_up_time: time | None = None
+    assigned_to_provider_id: str | None = None
+    notify_patient: bool = False
+    next_action_date: date | None = None
 
 
 class AlertPatchRequest(BaseModel):
@@ -201,6 +228,9 @@ class PatientSummaryOut(BaseModel):
     full_name: str
     age: int | None
     contact_number: str | None
+    condition: str | None = None
+    clinic: str | None = None
+    enrolled_at: datetime | None = None
 
 
 class PatientDetailOut(BaseModel):
@@ -210,6 +240,13 @@ class PatientDetailOut(BaseModel):
     latest_check_in: CheckInWithAssessmentOut | None
     open_alerts: list[AlertOut]
     follow_ups: list[FollowUpActionOut]
+    # The provider currently holding the active
+    # patient_provider_assignments row for this patient — resolved
+    # server-side (see patient_detail() in app/api/provider.py). None only
+    # in the edge case of a patient with no active assignment, which
+    # shouldn't normally reach this endpoint since require_assigned_patient
+    # already requires the caller to be that assignment.
+    assigned_provider_name: str | None = None
 
 
 class TimelineEntryOut(BaseModel):

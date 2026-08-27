@@ -138,7 +138,7 @@ export default function PatientRecord() {
     );
   }
 
-  const { patient, medications, latestCheckIn, latestBP, riskLevel, followUps, openAlerts } = data;
+  const { patient, medications, latestCheckIn, latestBP, riskLevel, followUps, openAlerts, assignedProviderName } = data;
   // Best-effort: alert-specific reason codes aren't tracked separately from
   // the assessment that created them, so the most recent check-in's reason
   // codes are shown as the likely cause — accurate for the common case of
@@ -157,6 +157,15 @@ export default function PatientRecord() {
             <Typography variant="h1">{patient.name}</Typography>
             <Typography variant="body2" color="text.secondary">
               Patient ID: {patient.id} · Age {patient.age} · {patient.email}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              {patient.condition ?? "Condition not recorded"}
+              {" · Assigned "}
+              {assignedProviderName ?? "Unassigned"}
+              {patient.clinic ? ` · ${patient.clinic}` : ""}
+              {patient.enrolledAt
+                ? ` · Enrolled ${new Date(patient.enrolledAt).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" })}`
+                : ""}
             </Typography>
           </Box>
           <RiskBadge level={riskLevel} />
@@ -253,7 +262,7 @@ export default function PatientRecord() {
                 variant="outlined"
                 onClick={() => navigate(`/provider/patients/${patient.id}/risk-review`)}
               >
-                Open Alert
+                Review Assessment
               </Button>
             </Box>
           ))
@@ -344,11 +353,27 @@ export default function PatientRecord() {
             Latest weekly check-in
           </Typography>
           {latestCheckIn ? (
-            <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 2 }}>
+            <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 2 }}>
               <Field label="Submitted" value={formatDateTime(latestCheckIn.patient_submitted_at)} />
               <Field label="Missed doses" value={String(latestCheckIn.missed_dose_count ?? 0)} />
               <Field label="Stopped medication" value={latestCheckIn.medication_stopped ? "Yes" : "No"} />
               <Field label="Medicine supply" value={SUPPLY_LABELS[latestCheckIn.supply_bucket] ?? "—"} />
+              <Field
+                label="Side effects"
+                value={
+                  latestCheckIn.side_effects_reported
+                    ? latestCheckIn.side_effects_text || "Yes"
+                    : "None reported"
+                }
+              />
+              <Field
+                label="Difficulties"
+                value={
+                  latestCheckIn.difficulty_reported
+                    ? latestCheckIn.difficulty_text || "Yes"
+                    : "None reported"
+                }
+              />
             </Box>
           ) : (
             <Typography variant="body2" color="text.secondary">

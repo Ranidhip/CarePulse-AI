@@ -60,7 +60,7 @@ def get_patient_or_404(supabase: Client, patient_id: str) -> dict:
     """
     row = one_or_none(
         supabase.table("patient_profiles")
-        .select("id, full_name, age, contact_number")
+        .select("id, full_name, age, contact_number, condition, clinic, enrolled_at")
         .eq("id", patient_id)
     )
     if row is None:

@@ -22,7 +22,16 @@ from supabase import Client
 from app.core.config import get_settings
 from app.core.db import one_or_none
 from app.core.security import get_anon_supabase_client, get_supabase_client
-from app.models.auth import MeProfile, PatientSignUpRequest, RefreshRequest, SessionResponse, SignInRequest
+from app.models.auth import (
+    ForgotPasswordRequest,
+    MeProfile,
+    MessageResponse,
+    PatientSignUpRequest,
+    RefreshRequest,
+    ResetPasswordRequest,
+    SessionResponse,
+    SignInRequest,
+)
 
 router = APIRouter(tags=["auth"])
 
@@ -179,6 +188,72 @@ def patient_sign_up(
     )
     profile = _load_active_profile(service_client, auth_user.id)
     return _session_response(result.session, profile)
+
+
+@router.post("/auth/forgot-password", response_model=MessageResponse)
+def forgot_password(
+    body: ForgotPasswordRequest,
+    anon_client: Client = Depends(get_anon_supabase_client),
+):
+    """
+    Triggers Supabase Auth's own password-recovery email — this backend
+    sends no email itself. Uses the anon client, matching sign_in()'s
+    rule above: never the service-role key for anything that touches
+    Supabase Auth's password/token machinery.
+
+    Always returns the same generic message whether or not the email
+    matches a real account, same "never reveal whether the email exists"
+    rule sign_in() follows for 401s — a failure here (bad email, or
+    Supabase Auth erroring) is deliberately swallowed rather than
+    distinguished in the response. Whether the recipient actually
+    receives an email depends on this Supabase project's own email
+    sending being configured; this endpoint has no way to detect or
+    report that from here.
+    """
+    settings = get_settings()
+    redirect_to = f"{settings.web_app_url.rstrip('/')}/provider/reset-password"
+    try:
+        anon_client.auth.reset_password_for_email(body.email, {"redirect_to": redirect_to})
+    except Exception:
+        pass
+    return MessageResponse(
+        message="If an account exists for that email, a password reset link has been sent."
+    )
+
+
+@router.post("/auth/reset-password", response_model=MessageResponse)
+def reset_password(
+    body: ResetPasswordRequest,
+    service_client: Client = Depends(get_supabase_client),
+):
+    """
+    Completes the password-recovery flow started by POST
+    /auth/forgot-password: verifies the short-lived recovery access token
+    Supabase emailed the user — the same supabase.auth.get_user() check
+    get_current_user() uses (see core/security.py) — then sets the new
+    password via the service-role admin API, which is the only way to
+    change a user's password without their current one. The recovery
+    token is single-purpose and time-limited; it is never stored or
+    treated as an ordinary session token beyond this one verification.
+    """
+    try:
+        auth_response = service_client.auth.get_user(body.access_token)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This reset link is invalid or has expired. Request a new one.",
+        )
+    auth_user = getattr(auth_response, "user", None)
+    if auth_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This reset link is invalid or has expired. Request a new one.",
+        )
+
+    service_client.auth.admin.update_user_by_id(auth_user.id, {"password": body.new_password})
+    return MessageResponse(
+        message="Your password has been updated. Sign in with your new password."
+    )
 
 
 @router.post("/auth/refresh", response_model=SessionResponse)

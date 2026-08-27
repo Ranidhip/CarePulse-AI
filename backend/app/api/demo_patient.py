@@ -145,6 +145,12 @@ def submit_checkin(
             missed_dose_count=body.missed_dose_count,
             supply_remaining=supply_remaining,
             difficulty_reported=body.difficulty_reported,
+            # This demo-only CheckInRequest has no side-effects field of
+            # its own (see its definition above) — the demo SQLite path
+            # is a separate legacy system, out of scope for the
+            # side_effects_reported addition (see supabase/migrations/
+            # 20260827120000_check_in_side_effects.sql's docstring).
+            side_effects_reported=False,
             systolic=systolic,
             diastolic=diastolic,
         )

@@ -339,6 +339,8 @@ export const api = {
       supply_bucket: SupplyBucket;
       difficulty_reported: boolean;
       difficulty_text: string | null;
+      side_effects_reported: boolean;
+      side_effects_text: string | null;
       patient_submitted_at: string;
     },
     // Overridable so the offline queue (lib/offlineQueue.ts) can retry the
@@ -362,6 +364,8 @@ export const api = {
           supply_remaining,
           difficulty_reported: input.difficulty_reported,
           difficulty_text: input.difficulty_text,
+          side_effects_reported: input.side_effects_reported,
+          side_effects_text: input.side_effects_text,
           requests_contact: false,
           patient_submitted_at: input.patient_submitted_at,
         },

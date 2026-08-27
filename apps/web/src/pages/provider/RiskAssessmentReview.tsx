@@ -9,9 +9,48 @@ import TextField from "@mui/material/TextField";
 import CircularProgress from "@mui/material/CircularProgress";
 import RiskBadge from "../../components/RiskBadge";
 import { api, ApiError } from "../../lib/providerApi";
+import type { BPTrendPoint } from "../../lib/providerApi";
 import { overrideReasonSchema, validateOrError } from "../../lib/validation";
 import type { PatientDetail } from "../../types";
 import { REASON_CODE_LABELS, SUPPLY_LABELS } from "../../types";
+
+// Same abnormal-BP thresholds the deterministic rule engine uses
+// (backend/app/services/rules/engine.py) for "high", and the 140/90
+// hypertension reference BPTrendChart already draws, for "elevated" —
+// reusing both rather than inventing a third set of numbers here.
+const HIGH_SYSTOLIC_THRESHOLD = 180;
+const HIGH_DIASTOLIC_THRESHOLD = 120;
+const ELEVATED_SYSTOLIC_THRESHOLD = 140;
+const ELEVATED_DIASTOLIC_THRESHOLD = 90;
+
+function bpSeverityColor(systolic: number, diastolic: number): { bg: string; border: string } | null {
+  if (systolic >= HIGH_SYSTOLIC_THRESHOLD || diastolic >= HIGH_DIASTOLIC_THRESHOLD) {
+    return { bg: "#F7E1DE", border: "#B3261E" };
+  }
+  if (systolic >= ELEVATED_SYSTOLIC_THRESHOLD || diastolic >= ELEVATED_DIASTOLIC_THRESHOLD) {
+    return { bg: "#FBF1D9", border: "#8A6D00" };
+  }
+  return null;
+}
+
+function formatReadingDateTime(iso: string): string {
+  const d = new Date(iso);
+  return (
+    d.toLocaleDateString(undefined, { day: "2-digit", month: "short" }) +
+    ", " +
+    d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+  );
+}
+
+function formatDateTime(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return (
+    d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) +
+    ", " +
+    d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+  );
+}
 
 const OVERRIDE_LEVELS: { value: "low" | "medium" | "high"; label: string }[] = [
   { value: "low", label: "Low" },
@@ -36,6 +75,8 @@ export default function RiskAssessmentReview() {
   const [overrideReason, setOverrideReason] = useState("");
   const [overrideError, setOverrideError] = useState<string | null>(null);
   const [submittingOverride, setSubmittingOverride] = useState(false);
+  const [bpHistory, setBpHistory] = useState<BPTrendPoint[]>([]);
+  const [bpHistoryLoading, setBpHistoryLoading] = useState(true);
 
   const load = useCallback(() => {
     if (!patientId) return;
@@ -53,6 +94,18 @@ export default function RiskAssessmentReview() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!patientId) return;
+    let cancelled = false;
+    api
+      .getBPHistory(patientId)
+      .then((readings) => !cancelled && setBpHistory(readings))
+      .finally(() => !cancelled && setBpHistoryLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [patientId]);
 
   async function handleMarkInProgress() {
     const alertId = data?.openAlerts[0]?.id;
@@ -143,6 +196,8 @@ export default function RiskAssessmentReview() {
     ruleResultLevel,
     aiSuggestedLevel,
     aiConfidence,
+    assessmentCreatedAt,
+    modelVersion,
     openAlerts,
     feedback,
     providerOverrideLevel,
@@ -231,6 +286,46 @@ export default function RiskAssessmentReview() {
                 Provider decision pending
               </Typography>
             )}
+          </Box>
+        </Box>
+
+        <Box sx={{ mt: 2, pt: 2, borderTop: "1px solid #EEE" }}>
+          <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>
+            Model information
+          </Typography>
+          <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 3 }}>
+            <Box>
+              <Typography variant="caption" color="text.secondary">
+                Suggested tier
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600, mt: 0.5 }}>
+                {aiSuggestedLevel ? aiSuggestedLevel.toUpperCase() : "—"}
+              </Typography>
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary">
+                Confidence
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600, mt: 0.5 }}>
+                {aiConfidence != null ? `${Math.round(aiConfidence * 100)}%` : "—"}
+              </Typography>
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary">
+                Generated
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600, mt: 0.5 }}>
+                {formatDateTime(assessmentCreatedAt)}
+              </Typography>
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary">
+                Model version
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600, mt: 0.5 }}>
+                {modelVersion ?? "Not yet reviewed"}
+              </Typography>
+            </Box>
           </Box>
         </Box>
 
@@ -330,6 +425,12 @@ export default function RiskAssessmentReview() {
               <b>Medicine supply:</b> {SUPPLY_LABELS[latestCheckIn.supply_bucket] ?? "—"}
             </Typography>
             <Typography variant="body2" sx={{ mb: 0.5 }}>
+              <b>Side effects:</b> {latestCheckIn.side_effects_reported ? "Yes" : "No"}
+              {latestCheckIn.side_effects_reported && latestCheckIn.side_effects_text
+                ? ` — "${latestCheckIn.side_effects_text}"`
+                : ""}
+            </Typography>
+            <Typography variant="body2" sx={{ mb: 0.5 }}>
               <b>Difficulty reported:</b> {latestCheckIn.difficulty_reported ? "Yes" : "No"}
             </Typography>
             {latestCheckIn.difficulty_text && (
@@ -337,11 +438,49 @@ export default function RiskAssessmentReview() {
                 "{latestCheckIn.difficulty_text}"
               </Typography>
             )}
-            {latestCheckIn.systolic && (
-              <Typography variant="body2" sx={{ mt: 0.5 }}>
-                <b>Latest BP:</b> {latestCheckIn.systolic}/{latestCheckIn.diastolic} mmHg
+
+            <Typography variant="body2" sx={{ mt: 1.5, mb: 1 }}>
+              <b>Self-recorded blood pressure</b>
+            </Typography>
+            {bpHistoryLoading ? (
+              <Typography variant="body2" color="text.secondary">
+                Loading…
+              </Typography>
+            ) : bpHistory.length > 0 ? (
+              <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
+                {bpHistory
+                  .slice(-4)
+                  .reverse()
+                  .map((reading) => {
+                    const severity = bpSeverityColor(reading.systolic, reading.diastolic);
+                    return (
+                      <Box
+                        key={reading.id}
+                        sx={{
+                          p: 1,
+                          borderRadius: 1,
+                          border: `1px solid ${severity?.border ?? "#E0E0E0"}`,
+                          backgroundColor: severity?.bg ?? "transparent",
+                        }}
+                      >
+                        <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                          {reading.systolic} / {reading.diastolic}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {formatReadingDateTime(reading.measuredAt)}
+                        </Typography>
+                      </Box>
+                    );
+                  })}
+              </Box>
+            ) : (
+              <Typography variant="body2" color="text.secondary">
+                No blood-pressure readings recorded yet.
               </Typography>
             )}
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
+              Readings are patient-recorded and not clinically verified.
+            </Typography>
           </Paper>
 
           <Paper variant="outlined" sx={{ p: 3 }}>

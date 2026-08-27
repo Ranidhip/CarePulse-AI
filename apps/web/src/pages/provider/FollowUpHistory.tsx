@@ -54,6 +54,13 @@ function entryDetail(entry: TimelineEntry): string {
     .join(" · ") || "No notes recorded.";
 }
 
+/** Who performed this action — only follow-ups have a resolvable actor. */
+function entryActor(entry: TimelineEntry): string | null {
+  if (entry.entry_type !== "follow_up") return null;
+  const name = entry.data.provider_full_name;
+  return typeof name === "string" ? name : null;
+}
+
 export default function FollowUpHistory() {
   const { patientId } = useParams<{ patientId: string }>();
   const navigate = useNavigate();
@@ -87,6 +94,11 @@ export default function FollowUpHistory() {
   });
   const followUpCount = entries.filter((e) => e.entry_type === "follow_up").length;
   const mostRecent = entries[0];
+  // Entries are already sorted newest-first by the backend, so the first
+  // follow-up entry with a next_action_date is the current one.
+  const nextFollowUpDate = entries.find(
+    (e) => e.entry_type === "follow_up" && typeof e.data.next_action_date === "string",
+  )?.data.next_action_date as string | undefined;
 
   return (
     <Box sx={{ p: 4, maxWidth: 800 }}>
@@ -107,6 +119,16 @@ export default function FollowUpHistory() {
             </Typography>
           </Box>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+            {nextFollowUpDate && (
+              <Typography variant="body2" color="text.secondary">
+                Next follow-up{" "}
+                {new Date(nextFollowUpDate).toLocaleDateString(undefined, {
+                  day: "2-digit",
+                  month: "short",
+                  year: "numeric",
+                })}
+              </Typography>
+            )}
             <RiskBadge level={data.riskLevel} />
             <Box className="no-print" sx={{ display: "flex", gap: 1.5 }}>
               <Button variant="contained" onClick={() => navigate(`/provider/patients/${data.patient.id}/follow-up`)}>
@@ -145,24 +167,55 @@ export default function FollowUpHistory() {
           </Typography>
         </Paper>
       ) : (
-        filteredEntries.map((entry, i) => (
-          <Paper key={`${entry.entry_type}-${String(entry.data.id ?? i)}`} variant="outlined" sx={{ p: 2.5, mb: 1.5 }}>
-            <Box sx={{ display: "flex", justifyContent: "space-between", mb: 0.5 }}>
-              <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                {formatDateTime(entry.occurred_at)}
+        filteredEntries.map((entry, i) => {
+          // Alert entries carry their own id; follow-up entries carry the
+          // alert_id they were recorded against. Check-ins aren't tied to
+          // a specific alert, so they get no link.
+          const alertId =
+            entry.entry_type === "alert"
+              ? (entry.data.id as string | undefined)
+              : entry.entry_type === "follow_up"
+                ? (entry.data.alert_id as string | undefined)
+                : undefined;
+          const actor = entryActor(entry);
+          return (
+            <Paper key={`${entry.entry_type}-${String(entry.data.id ?? i)}`} variant="outlined" sx={{ p: 2.5, mb: 1.5 }}>
+              <Box sx={{ display: "flex", justifyContent: "space-between", mb: 0.5 }}>
+                <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                  {formatDateTime(entry.occurred_at)}
+                </Typography>
+                <Box sx={{ textAlign: "right" }}>
+                  {actor && (
+                    <Typography variant="caption" sx={{ display: "block", fontWeight: 600 }}>
+                      {actor}
+                    </Typography>
+                  )}
+                  <Typography variant="caption" color="text.secondary" sx={{ textTransform: "capitalize" }}>
+                    {entry.entry_type.replace("_", " ")}
+                  </Typography>
+                </Box>
+              </Box>
+              <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
+                {entryTitle(entry)}
               </Typography>
-              <Typography variant="caption" color="text.secondary" sx={{ textTransform: "capitalize" }}>
-                {entry.entry_type.replace("_", " ")}
-              </Typography>
-            </Box>
-            <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
-              {entryTitle(entry)}
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              {entryDetail(entry)}
-            </Typography>
-          </Paper>
-        ))
+              <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 2 }}>
+                <Typography variant="body2" color="text.secondary">
+                  {entryDetail(entry)}
+                </Typography>
+                {alertId && (
+                  <Button
+                    className="no-print"
+                    size="small"
+                    onClick={() => navigate(`/provider/patients/${data.patient.id}/risk-review`)}
+                    sx={{ flexShrink: 0 }}
+                  >
+                    View alert
+                  </Button>
+                )}
+              </Box>
+            </Paper>
+          );
+        })
       )}
     </Box>
   );

@@ -65,6 +65,9 @@ def predict(row: dict) -> tuple[str, list[str]]:
             missed_dose_count=row["missed_dose_count"],
             supply_remaining=row["supply_remaining"],
             difficulty_reported=row["difficulty_reported"],
+            # .get(), not row[...]: dataset.jsonl rows generated before
+            # side_effects_reported existed have no such key.
+            side_effects_reported=row.get("side_effects_reported", False),
             systolic=row["systolic"],
             diastolic=row["diastolic"],
         )

@@ -22,6 +22,22 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(..., min_length=1)
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(..., min_length=1)
+
+
+class ResetPasswordRequest(BaseModel):
+    # The short-lived recovery access token Supabase Auth's password-reset
+    # email links back with — not a normal session access token, and
+    # never treated as one (see POST /auth/reset-password).
+    access_token: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8, max_length=200)
+
+
+class MessageResponse(BaseModel):
+    message: str
+
+
 class MeProfile(BaseModel):
     id: str
     email: str
