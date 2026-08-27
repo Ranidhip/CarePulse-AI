@@ -63,10 +63,16 @@ app.add_middleware(
 )
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD", "POST"])
 def health_check() -> dict:
     """
     Basic liveness check.
+
+    Accepts GET/HEAD/POST (not just GET) because external uptime-monitor
+    services used to keep this instance warm on Render's free tier don't
+    all default to GET — one observed sending POST here got a 405 with a
+    plain @app.get(), which the monitor's own dashboard then reported as
+    "down" even though the app was fully healthy.
     """
     return {"status": "ok", "service": "carepulse-ai-backend"}
 
