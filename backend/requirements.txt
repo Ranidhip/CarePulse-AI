@@ -8,7 +8,13 @@ pydantic==2.13.4
 pydantic-core==2.46.4
 pydantic-settings==2.5.2
 python-dotenv==1.0.1
-supabase==2.7.4
+# Bumped from 2.7.4: that version's create_client() rejects Supabase's
+# newer sb_publishable_/sb_secret_ API keys client-side (regex requires a
+# JWT-shaped string), raising SupabaseException("Invalid API key") before
+# any network call — surfaced as a 500 on /auth/sign-in once the project's
+# legacy JWT-based anon/service_role keys were disabled. 2.31.0 accepts
+# both key formats. Verified: pip check clean, all 110 tests passing.
+supabase==2.31.0
 openai==3.3.0
 openai-agents==0.21.1
 pytest==8.3.3
