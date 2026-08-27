@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # CarePulse AI
 
 Hypertension medication-adherence and patient follow-up decision-support prototype.
@@ -63,3 +64,6 @@ your machine — see `apps/web/README.md`, `apps/mobile/README.md`,
 Deterministic rules in `backend/app/services/rules/` are the safety floor.
 AI in `backend/app/services/ai/` may only add evidence/summary and can never
 lower a rule-derived risk level. See `docs/00-scope-freeze.md` section 5.
+=======
+# CarePulse-AI
+>>>>>>> 994d8812b6b99861dbbfd345bbe716df42ac5bd1
