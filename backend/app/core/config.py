@@ -20,11 +20,14 @@ class Settings(BaseSettings):
     # Never affects production routes, schema, or the Supabase client.
     demo_mode: bool = False
 
-    # CORS — origins allowed to call this API during local development.
+    # CORS — origins allowed to call this API.
     cors_allowed_origins: list[str] = [
         "http://localhost:5173",   # Vite dev server default
         "http://localhost:19006",  # Expo web dev default (SDK < 49)
         "http://localhost:8081",   # Expo web dev default (SDK 49+, incl. this project's SDK 54)
+        # TODO: replace with the real deployed Vercel URL once assigned,
+        # then redeploy the backend — this placeholder allows nothing.
+        "https://REPLACE-WITH-YOUR-VERCEL-URL.vercel.app",
     ]
 
     # Base URL of the deployed provider web app — used only to build the
