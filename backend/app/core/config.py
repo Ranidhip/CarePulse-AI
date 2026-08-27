@@ -25,9 +25,7 @@ class Settings(BaseSettings):
         "http://localhost:5173",   # Vite dev server default
         "http://localhost:19006",  # Expo web dev default (SDK < 49)
         "http://localhost:8081",   # Expo web dev default (SDK 49+, incl. this project's SDK 54)
-        # TODO: replace with the real deployed Vercel URL once assigned,
-        # then redeploy the backend — this placeholder allows nothing.
-        "https://REPLACE-WITH-YOUR-VERCEL-URL.vercel.app",
+        "https://care-pulse-ai-gules.vercel.app",  # Deployed provider dashboard (Vercel)
     ]
 
     # Base URL of the deployed provider web app — used only to build the
