@@ -49,14 +49,23 @@ export default function HistoryScreen() {
   const session = useRequireSession();
   const [data, setData] = useState<ApiHistory | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("bp");
   const [range, setRange] = useState<RangeFilter>("30");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
+      setError(null);
       const history = await api.getHistory();
       setData(history);
+    } catch (e) {
+      // Surface the failure instead of silently falling back to the
+      // "no readings yet" empty state (see HomeScreen's identical
+      // pattern) — otherwise a real fetch failure (expired session,
+      // backend cold-start, Supabase hiccup) is indistinguishable from
+      // a patient who genuinely has no history yet.
+      setError(e instanceof Error ? e.message : "Failed to load your history.");
     } finally {
       setLoading(false);
     }
@@ -121,6 +130,14 @@ export default function HistoryScreen() {
         refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}
       >
         <H1>History</H1>
+
+        {error && (
+          <View style={styles.errorBox}>
+            <Secondary style={{ color: colors.error }}>
+              Couldn't load your history — {error} Pull down to retry.
+            </Secondary>
+          </View>
+        )}
 
         <View style={styles.tabRow}>
           <Pressable
@@ -290,6 +307,13 @@ export default function HistoryScreen() {
 
 const styles = StyleSheet.create({
   content: { padding: spacing.lg, paddingBottom: spacing.xl },
+  errorBox: {
+    borderWidth: 1,
+    borderColor: colors.error,
+    borderRadius: radius,
+    padding: spacing.sm,
+    marginTop: spacing.sm,
+  },
   tabRow: { flexDirection: "row", marginTop: spacing.md, marginBottom: spacing.sm, gap: spacing.xs },
   tab: {
     flex: 1,
